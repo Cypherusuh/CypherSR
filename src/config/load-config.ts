@@ -1,0 +1,52 @@
+import type { SongRequestConfig } from './types.js';
+
+function requiredEnv(name: string): string {
+  const value = process.env[name]?.trim();
+
+  if (!value) {
+    throw new Error(`Missing required environment variable: ${name}`);
+  }
+
+  return value;
+}
+
+function positiveIntegerEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+
+  if (raw === undefined || raw.trim() === '') {
+    return fallback;
+  }
+
+  const value = Number(raw);
+
+  if (!Number.isSafeInteger(value) || value < 1) {
+    throw new Error(`${name} must be a positive integer.`);
+  }
+
+  return value;
+}
+
+export function loadConfig(): SongRequestConfig {
+  return {
+    twitch: {
+      clientId: requiredEnv('TWITCH_CLIENT_ID'),
+      channel: requiredEnv('TWITCH_CHANNEL').replace(/^@/, '').toLowerCase(),
+      scopes: ['user:read:chat', 'user:write:chat'],
+      tokenPath: process.env.TWITCH_TOKEN_PATH?.trim() || '.tokens/twitch.json',
+    },
+
+    queue: {
+      limit: positiveIntegerEnv('SONG_REQUEST_QUEUE_LIMIT', 10),
+    },
+
+    commands: {
+      prefix: process.env.COMMAND_PREFIX?.trim() || '!',
+    },
+
+    playback: {
+      radioUrl: process.env.RADIO_URL?.trim() || undefined,
+      mpvPath: process.env.MPV_PATH?.trim() || 'mpv',
+      ytDlpPath: process.env.YT_DLP_PATH?.trim() || 'yt-dlp',
+    },
+  };
+}
