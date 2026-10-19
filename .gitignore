@@ -46,3 +46,5 @@ Thumbs.db
 
 # Local vendor binaries
 /vendor/
+
+.cache/

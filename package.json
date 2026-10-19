@@ -30,6 +30,6 @@
     "vitest": "^4.1.12"
   },
   "dependencies": {
-    "streamops-twitch-connector": "^0.1.4"
+    "streamops-twitch-connector": "^0.1.5"
   }
 }
