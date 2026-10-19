@@ -467,6 +467,8 @@ export class MediaServer {
             } else {
                 this.playbackRuntime.position = value;
             }
+
+            this.playbackRuntime.updatedAt = Date.now();
         }
 
         if (action === 'volume') {

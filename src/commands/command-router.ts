@@ -44,9 +44,6 @@ export class CommandRouter {
 
 const [name, ...args] = input.split(/\s+/);
 
-console.log(
-  `[Commands] Parsed command: name="${name}", args="${args.join(' ')}"`,
-);
 
 const command = this.commands.get(name.toLowerCase());
 

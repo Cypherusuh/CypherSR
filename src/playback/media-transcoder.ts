@@ -43,6 +43,8 @@ export class MediaTranscoder {
         } = this.options;
 
         const absoluteMediaDir = resolve(mediaDir);
+        const absoluteFfmpegPath = resolve(ffmpegPath);
+        const absoluteFfmpegDir = resolve(absoluteFfmpegPath, '..');
 
         await mkdir(absoluteMediaDir, { recursive: true });
 
@@ -53,16 +55,18 @@ export class MediaTranscoder {
         const temporaryOutput = join(workDir, 'output.mp4');
 
         try {
+
             await execFileAsync(
                 ytDlpPath,
                 [
                     '--no-playlist',
                     '--no-warnings',
-                    '--no-call-home',
                     '--js-runtimes',
                     'node',
                     '--remote-components',
                     'ejs:github',
+                    '--ffmpeg-location',
+                    absoluteFfmpegDir,
                     '--format',
                     `bestvideo[height<=${maxVideoHeight}]+bestaudio/best[height<=${maxVideoHeight}]`,
                     '--remux-video',
@@ -79,8 +83,9 @@ export class MediaTranscoder {
                 },
             );
 
+
             await execFileAsync(
-                ffmpegPath,
+                absoluteFfmpegPath,
                 [
                     '-hide_banner',
                     '-loglevel',

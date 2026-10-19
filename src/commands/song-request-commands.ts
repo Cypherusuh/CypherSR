@@ -69,7 +69,6 @@ export function createSongRequestCommands(
           return reply('Usage: !sr <URL or search query>');
         }
 
-        console.log(`[SongRequest] Resolving request: ${query}`);
 return reply(await actions.requestSong(message, query));
       },
     },

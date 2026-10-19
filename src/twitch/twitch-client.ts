@@ -50,11 +50,6 @@ export class TwitchClient implements TwitchClientInterface {
     async login(): Promise<void> {
         const login = await this.client.tokens.startLogin();
 
-        console.log('\n[Twitch] Authorize SongRequest');
-        console.log(`Open: ${login.verificationUri}`);
-        console.log(`Code: ${login.userCode}`);
-        console.log('Waiting for authorization...');
-
         await this.client.tokens.completeLogin();
 
         console.log('[Twitch] Authorization successful.');
@@ -142,10 +137,6 @@ export class TwitchClient implements TwitchClientInterface {
                     );
                 }
 
-                console.log(
-                    `[Twitch] Subscribing to chat on EventSub session ${sessionId}.`,
-                );
-
                 const subscription =
                     await this.client.subscriptions.subscribeToChatMessages(
                         this.broadcasterId,
@@ -154,10 +145,6 @@ export class TwitchClient implements TwitchClientInterface {
                     );
 
                 const status = subscription.data?.[0]?.status;
-
-                console.log(
-                    `[Twitch] Chat subscription status: ${status ?? 'missing'}.`,
-                );
 
                 if (status !== 'enabled') {
                     throw new Error(
