@@ -239,6 +239,30 @@ export class MediaServer {
             return;
         }
 
+        if (url.pathname === '/api/player/skip') {
+            if (request.method !== 'POST') {
+                response.setHeader('Allow', 'POST');
+                this.sendError(response, 405, 'Method not allowed');
+                return;
+            }
+
+            if (!this.playbackCoordinator) {
+                this.sendError(response, 503, 'Playback is not initialized');
+                return;
+            }
+
+            const skipped = await this.playbackCoordinator.skipTrack();
+
+            this.sendJson(response, 200, {
+                skipped,
+                message: skipped
+                    ? 'Skipping the current track.'
+                    : 'There is no track to skip.',
+            });
+
+            return;
+        }
+
         if (url.pathname === '/api/player/ended') {
             if (request.method !== 'POST') {
                 response.setHeader('Allow', 'POST');

@@ -24,6 +24,7 @@ async function main(): Promise<void> {
   const savedTokens = await tokenStore.load();
 
   if (!savedTokens) {
+    console.log('[Twitch] No saved credentials found. Starting login...');
     await twitch.login();
   }
 
@@ -85,8 +86,31 @@ async function main(): Promise<void> {
   try {
     await twitch.connect();
   } catch (error) {
-    await mediaServer.stop();
-    throw error;
+    const message =
+      error instanceof Error ? error.message : String(error);
+
+    const isRefreshFailure =
+      /token refresh failed|invalid refresh token|refresh token.*invalid/i.test(
+        message,
+      );
+
+    if (!isRefreshFailure) {
+      await mediaServer.stop();
+      throw error;
+    }
+
+    console.warn(
+      '[Twitch] Saved credentials could not be refreshed. Starting login again.',
+    );
+
+    try {
+      await tokenStore.clear();
+      await twitch.login();
+      await twitch.connect();
+    } catch (loginError) {
+      await mediaServer.stop();
+      throw loginError;
+    }
   }
 
   twitch.onMessage((message) => {

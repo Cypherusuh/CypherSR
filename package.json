@@ -17,8 +17,10 @@
   "scripts": {
     "build": "tsc",
     "start": "node --env-file=.env dist/main.js",
+    "dev": "tsx watch --env-file=.env src/main.ts",
+    "dev:build": "tsc --watch",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:w": "vitest"
   },
   "engines": {
     "node": ">=22"
@@ -26,6 +28,7 @@
   "license": "MIT",
   "devDependencies": {
     "@types/node": "^24.19.2",
+    "tsx": "^4.23.15",
     "typescript": "^6.0.3",
     "vitest": "^4.1.12"
   },

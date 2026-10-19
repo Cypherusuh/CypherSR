@@ -50,6 +50,18 @@ export class TwitchClient implements TwitchClientInterface {
     async login(): Promise<void> {
         const login = await this.client.tokens.startLogin();
 
+        console.log('\n[Twitch] Authorization required.');
+        console.log(`[Twitch] Open: ${login.verificationUri}`);
+        console.log(`[Twitch] Enter code: ${login.userCode}`);
+        console.log(
+            `[Twitch] Code expires in ${Math.floor(login.expiresIn / 60)} minutes.`,
+        );
+
+        await import('node:child_process').then(({ exec }) => {
+            const url = login.verificationUri.replace(/"/g, '');
+            exec(`start "" "${url}"`);
+        });
+
         await this.client.tokens.completeLogin();
 
         console.log('[Twitch] Authorization successful.');
