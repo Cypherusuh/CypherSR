@@ -1,0 +1,603 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>StreamOps - Song Queue</title>
+
+  <style>
+    :root {
+      color-scheme: dark;
+      --text: #f2f5f8;
+      --muted: #a0a8b3;
+      --accent: #75e6ff;
+      --green: #75e6b1;
+      --amber: #ffd27b;
+      --red: #ff8299;
+      --panel: rgba(0, 0, 0, 0.64);
+      --line: rgba(255, 255, 255, 0.12);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+      background: transparent;
+      color: var(--text);
+      font-family: Inter, "Segoe UI", sans-serif;
+    }
+
+    body {
+      padding: 4px;
+    }
+
+    .queue-panel {
+      display: flex;
+      flex-direction: column;
+      width: 100%;
+      height: 100%;
+      min-height: 0;
+      overflow: hidden;
+      border-radius: 5px;
+      background: var(--panel);
+    }
+
+    .header {
+      display: flex;
+      flex: 0 0 auto;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 8px 10px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .heading {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+    }
+
+    .indicator {
+      width: 5px;
+      height: 24px;
+      flex: 0 0 5px;
+      border-radius: 2px;
+      background: var(--accent);
+      box-shadow: 0 0 8px rgba(117, 230, 255, 0.35);
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 13px;
+      font-weight: 750;
+      letter-spacing: 0.04em;
+    }
+
+    .eyebrow {
+      margin-bottom: 2px;
+      color: var(--accent);
+      font-size: 8px;
+      font-weight: 700;
+      letter-spacing: 0.13em;
+      text-transform: uppercase;
+    }
+
+    .queue-count {
+      flex: 0 0 auto;
+      color: var(--muted);
+      font-size: 10px;
+      text-align: right;
+    }
+
+    .now-playing {
+      display: flex;
+      flex: 0 0 auto;
+      flex-direction: column;
+      gap: 4px;
+      padding: 8px 10px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .section-label {
+      color: var(--accent);
+      font-size: 8px;
+      font-weight: 750;
+      letter-spacing: 0.13em;
+      text-transform: uppercase;
+    }
+
+    .current-title {
+      display: -webkit-box;
+      overflow: hidden;
+      font-size: 12px;
+      font-weight: 700;
+      line-height: 1.35;
+      overflow-wrap: anywhere;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 2;
+      line-clamp: 2;
+    }
+
+    .current-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 3px 9px;
+      color: var(--muted);
+      font-size: 9px;
+      line-height: 1.35;
+    }
+
+    .list-header {
+      display: flex;
+      flex: 0 0 auto;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 8px 10px 4px;
+    }
+
+    .list-header h2 {
+      margin: 0;
+      color: var(--muted);
+      font-size: 9px;
+      font-weight: 750;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+
+    .list-header span {
+      color: var(--muted);
+      font-size: 9px;
+    }
+
+    .track-list {
+      display: flex;
+      flex: 1 1 auto;
+      flex-direction: column;
+      gap: 2px;
+      min-height: 0;
+      padding: 3px 6px 6px;
+      overflow-x: hidden;
+      overflow-y: auto;
+      scrollbar-color: rgba(255, 255, 255, 0.25) transparent;
+      scrollbar-width: thin;
+    }
+
+    .track {
+      display: flex;
+      flex: 0 0 auto;
+      align-items: flex-start;
+      gap: 7px;
+      min-width: 0;
+      padding: 6px 5px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+    }
+
+    .number {
+      display: flex;
+      flex: 0 0 20px;
+      align-items: center;
+      justify-content: center;
+      width: 20px;
+      min-height: 20px;
+      border-radius: 3px;
+      background: rgba(255, 255, 255, 0.08);
+      color: var(--accent);
+      font-size: 9px;
+      font-weight: 750;
+    }
+
+    .track-content {
+      flex: 1 1 auto;
+      min-width: 0;
+    }
+
+    .track-title {
+      display: -webkit-box;
+      overflow: hidden;
+      font-size: 10px;
+      font-weight: 650;
+      line-height: 1.35;
+      overflow-wrap: anywhere;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 2;
+      line-clamp: 2;
+    }
+
+    .track-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 2px 7px;
+      margin-top: 3px;
+      color: var(--muted);
+      font-size: 8px;
+      line-height: 1.35;
+    }
+
+    .status {
+      flex: 0 0 auto;
+      max-width: 66px;
+      padding: 2px 4px;
+      border-radius: 3px;
+      background: rgba(255, 255, 255, 0.07);
+      color: var(--muted);
+      font-size: 8px;
+      text-align: center;
+      overflow-wrap: anywhere;
+    }
+
+    .status.ready {
+      background: rgba(117, 230, 177, 0.1);
+      color: var(--green);
+    }
+
+    .status.resolving {
+      background: rgba(255, 210, 123, 0.1);
+      color: var(--amber);
+    }
+
+    .status.failed {
+      background: rgba(255, 130, 153, 0.1);
+      color: var(--red);
+    }
+
+    .empty {
+      display: flex;
+      flex: 1 1 auto;
+      align-items: center;
+      justify-content: center;
+      padding: 12px 8px;
+      color: var(--muted);
+      font-size: 10px;
+      text-align: center;
+    }
+
+    .footer {
+      display: flex;
+      flex: 0 0 auto;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 5px 10px;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 8px;
+    }
+
+    @media (max-width: 240px) {
+      .header,
+      .now-playing {
+        padding-right: 7px;
+        padding-left: 7px;
+      }
+
+      .current-meta {
+        flex-direction: column;
+        gap: 2px;
+      }
+
+      .track {
+        gap: 5px;
+        padding-right: 2px;
+        padding-left: 2px;
+      }
+
+      .status {
+        max-width: 48px;
+        font-size: 7px;
+      }
+
+      .footer span:last-child {
+        display: none;
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <main class="queue-panel">
+    <header class="header">
+      <div class="heading">
+        <span class="indicator" aria-hidden="true"></span>
+        <div>
+          <div class="eyebrow">StreamOps / Live</div>
+          <h1>Song Queue</h1>
+        </div>
+      </div>
+
+      <div id="queueCount" class="queue-count">
+        Loading...
+      </div>
+    </header>
+
+    <section class="now-playing">
+      <div class="section-label">Now playing</div>
+      <div id="currentTitle" class="current-title">
+        Nothing playing
+      </div>
+
+      <div class="current-meta">
+        <span id="currentRequester">Requester: --</span>
+        <span id="currentUploader">Uploader: --</span>
+        <span id="currentDuration">Duration: --</span>
+      </div>
+    </section>
+
+    <div class="list-header">
+      <h2>Up next</h2>
+      <span id="listSummary">0 requests</span>
+    </div>
+
+    <section
+      id="trackList"
+      class="track-list"
+      aria-live="polite"
+      aria-label="Upcoming song requests"
+    >
+      <div class="empty">Loading queue...</div>
+    </section>
+
+    <footer class="footer">
+      <span id="connectionStatus">Connecting...</span>
+      <span>Auto-refresh</span>
+    </footer>
+  </main>
+
+  <script>
+    (() => {
+      'use strict';
+
+      const QUEUE_URL = '/api/queue';
+      const POLL_INTERVAL_MS = 1500;
+
+      const queueCount = document.getElementById('queueCount');
+      const currentTitle = document.getElementById('currentTitle');
+      const currentRequester = document.getElementById('currentRequester');
+      const currentUploader = document.getElementById('currentUploader');
+      const currentDuration = document.getElementById('currentDuration');
+      const listSummary = document.getElementById('listSummary');
+      const trackList = document.getElementById('trackList');
+      const connectionStatus = document.getElementById('connectionStatus');
+
+      let polling = false;
+      let lastSnapshotKey = null;
+
+      function formatDuration(seconds) {
+        if (
+          typeof seconds !== 'number' ||
+          !Number.isFinite(seconds) ||
+          seconds < 0
+        ) {
+          return '--';
+        }
+
+        const total = Math.floor(seconds);
+        const hours = Math.floor(total / 3600);
+        const minutes = Math.floor((total % 3600) / 60);
+        const remainingSeconds = total % 60;
+
+        if (hours > 0) {
+          return [
+            hours,
+            String(minutes).padStart(2, '0'),
+            String(remainingSeconds).padStart(2, '0')
+          ].join(':');
+        }
+
+        return `${minutes}:${String(remainingSeconds).padStart(2, '0')}`;
+      }
+
+      function getTrackTitle(request) {
+        return request.track?.title || request.query || 'Untitled request';
+      }
+
+      function getRequester(request) {
+        return (
+          request.requester?.displayName ||
+          request.requester?.username ||
+          'Unknown requester'
+        );
+      }
+
+      function getStatus(request) {
+        const status = request.status;
+
+        if (status === 'ready') {
+          return { label: 'Ready', className: 'ready' };
+        }
+
+        if (status === 'resolving') {
+          return { label: 'Resolving', className: 'resolving' };
+        }
+
+        if (status === 'failed') {
+          return { label: 'Failed', className: 'failed' };
+        }
+
+        return {
+          label: status || 'Pending',
+          className: ''
+        };
+      }
+
+      function createElement(tag, className, text) {
+        const element = document.createElement(tag);
+
+        if (className) {
+          element.className = className;
+        }
+
+        if (text !== undefined) {
+          element.textContent = text;
+        }
+
+        return element;
+      }
+
+      function renderCurrent(current) {
+        if (!current) {
+          currentTitle.textContent = 'Nothing playing';
+          currentRequester.textContent = 'Requester: --';
+          currentUploader.textContent = 'Uploader: --';
+          currentDuration.textContent = 'Duration: --';
+          return;
+        }
+
+        currentTitle.textContent = getTrackTitle(current);
+        currentRequester.textContent =
+          `Requester: ${getRequester(current)}`;
+
+        currentUploader.textContent =
+          `Uploader: ${current.track?.uploader || 'Unknown'}`;
+
+        currentDuration.textContent =
+          `Duration: ${formatDuration(current.track?.duration)}`;
+      }
+
+      function renderPending(pending) {
+        trackList.replaceChildren();
+
+        if (pending.length === 0) {
+          trackList.appendChild(
+            createElement('div', 'empty', 'No upcoming requests')
+          );
+          return;
+        }
+
+        pending.forEach((request, index) => {
+          const row = createElement('article', 'track');
+
+          const number = createElement(
+            'div',
+            'number',
+            String(index + 1).padStart(2, '0')
+          );
+
+          const content = createElement('div', 'track-content');
+
+          const title = createElement(
+            'div',
+            'track-title',
+            getTrackTitle(request)
+          );
+
+          const meta = createElement('div', 'track-meta');
+
+          meta.appendChild(
+            createElement('span', '', `By ${getRequester(request)}`)
+          );
+
+          if (request.track?.uploader) {
+            meta.appendChild(
+              createElement('span', '', request.track.uploader)
+            );
+          }
+
+          if (request.track?.duration != null) {
+            meta.appendChild(
+              createElement(
+                'span',
+                '',
+                formatDuration(request.track.duration)
+              )
+            );
+          }
+
+          const status = getStatus(request);
+
+          const statusElement = createElement(
+            'div',
+            `status ${status.className}`,
+            status.label
+          );
+
+          if (request.error) {
+            statusElement.title = request.error;
+          }
+
+          content.append(title, meta);
+          row.append(number, content, statusElement);
+          trackList.appendChild(row);
+        });
+      }
+
+      function snapshotKey(snapshot) {
+        return JSON.stringify(snapshot);
+      }
+
+      async function poll() {
+        if (polling) return;
+        polling = true;
+
+        try {
+          const response = await fetch(QUEUE_URL, {
+            cache: 'no-store'
+          });
+
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+          }
+
+          const snapshot = await response.json();
+
+          const current = snapshot.current || null;
+          const pending = Array.isArray(snapshot.pending)
+            ? snapshot.pending
+            : [];
+
+          const limit =
+            Number.isFinite(snapshot.limit) && snapshot.limit >= 0
+              ? snapshot.limit
+              : null;
+
+          queueCount.textContent =
+            limit === null
+              ? `${pending.length} queued`
+              : `${pending.length}/${limit} queued`;
+
+          listSummary.textContent =
+            `${pending.length} ${pending.length === 1 ? 'request' : 'requests'}`;
+
+          connectionStatus.textContent = 'Connected';
+
+          renderCurrent(current);
+
+          const key = snapshotKey({
+            current,
+            pending,
+            limit
+          });
+
+          if (key !== lastSnapshotKey) {
+            renderPending(pending);
+            lastSnapshotKey = key;
+          }
+        } catch {
+          connectionStatus.textContent = 'API unavailable';
+
+          if (lastSnapshotKey === null) {
+            queueCount.textContent = 'Unavailable';
+            listSummary.textContent = 'Waiting for API';
+
+            trackList.replaceChildren(
+              createElement('div', 'empty', 'Cannot load queue')
+            );
+          }
+        } finally {
+          polling = false;
+        }
+      }
+
+      poll();
+      setInterval(poll, POLL_INTERVAL_MS);
+    })();
+  </script>
+</body>
+</html>

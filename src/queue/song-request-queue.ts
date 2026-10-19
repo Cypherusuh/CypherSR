@@ -10,8 +10,15 @@ import type {
 import { TrackResolver } from './track-resolver.js';
 
 export class SongRequestQueue {
-  removePending(id: string) {
-      throw new Error('Method not implemented.');
+  removePending(id: string): boolean {
+    const index = this.pending.findIndex((request) => request.id === id);
+
+    if (index === -1) {
+      return false;
+    }
+
+    this.pending.splice(index, 1);
+    return true;
   }
   private current: SongRequest | null = null;
   private readonly pending: SongRequest[] = [];

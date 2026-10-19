@@ -9,12 +9,15 @@ const execFileAsync = promisify(execFile);
 interface YtDlpResult {
   id?: string;
   title?: string;
+  url?: string;
   webpage_url?: string;
   original_url?: string;
   duration?: number;
   thumbnail?: string;
+  thumbnails?: Array<{ url?: string }>;
   uploader?: string;
   channel?: string;
+  entries?: YtDlpResult[];
 }
 
 export class TrackResolver {
@@ -58,20 +61,36 @@ export class TrackResolver {
       throw new Error('yt-dlp returned invalid track metadata.');
     }
 
-    const url = result.webpage_url ?? result.original_url;
+    // Search results contain a playlist wrapper. Resolve the actual video
+    // instead of mistakenly using the search query as the track metadata.
+    const track = isUrl ? result : result.entries?.[0];
 
-    if (!result.id || !result.title || !url) {
+    if (!track) {
+      throw new Error('YouTube search returned no matching videos.');
+    }
+
+    const url =
+      track.webpage_url ??
+      track.original_url ??
+      (track.url?.startsWith('https://') ? track.url : undefined);
+
+    if (!track.id || !track.title || !url) {
       throw new Error('yt-dlp could not resolve this track.');
     }
 
+    const thumbnail =
+      track.thumbnail ??
+      track.thumbnails?.find((item) => item.url)?.url ??
+      null;
+
     return {
-      id: result.id,
-      title: result.title,
+      id: track.id,
+      title: track.title,
       url,
       duration:
-        typeof result.duration === 'number' ? result.duration : null,
-      thumbnail: result.thumbnail ?? null,
-      uploader: result.uploader ?? result.channel ?? null,
+        typeof track.duration === 'number' ? track.duration : null,
+      thumbnail,
+      uploader: track.uploader ?? track.channel ?? null,
     };
   }
 }

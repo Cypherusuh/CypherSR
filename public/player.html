@@ -1,0 +1,198 @@
+
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>StreamOps - Player</title>
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+      background: transparent;
+    }
+
+    video {
+      display: block;
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      background: transparent;
+    }
+  </style>
+</head>
+<body>
+  <video id="player" playsinline preload="auto"></video>
+
+  <script>
+    (() => {
+      'use strict';
+
+      const STATE_URL = '/api/player/state';
+      const ENDED_URL = '/api/player/ended';
+      const POLL_INTERVAL_MS = 500;
+
+      const video = document.getElementById('player');
+
+      let currentRequestId = null;
+      let currentMediaUrl = null;
+      let polling = false;
+      let generation = 0;
+      let endedRequestId = null;
+      let lastControlRevision = 0;
+
+      async function sendEnded(requestId) {
+        try {
+          await fetch(ENDED_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ requestId })
+          });
+        } catch {
+          // Keep the player alive if the completion notification fails.
+        }
+      }
+
+      async function applyControl(control) {
+        if (!control || !Number.isSafeInteger(control.revision)) return;
+        if (control.revision <= lastControlRevision) return;
+
+        lastControlRevision = control.revision;
+
+        switch (control.action) {
+          case 'play':
+            try {
+              await video.play();
+            } catch {
+              // Playback may require a browser interaction.
+            }
+            break;
+
+          case 'pause':
+            video.pause();
+            break;
+
+          case 'seek':
+            if (
+              Number.isFinite(control.value) &&
+              Number.isFinite(video.duration)
+            ) {
+              video.currentTime = Math.max(
+                0,
+                Math.min(control.value, video.duration)
+              );
+            }
+            break;
+
+          case 'volume':
+            if (Number.isFinite(control.value)) {
+              video.volume = Math.max(0, Math.min(1, control.value));
+              video.muted = video.volume === 0;
+            }
+            break;
+        }
+      }
+
+      async function pollState() {
+        if (polling) return;
+        polling = true;
+
+        try {
+          const response = await fetch(STATE_URL, {
+            cache: 'no-store'
+          });
+
+          if (!response.ok) return;
+
+          const state = await response.json();
+          const track = state.current;
+
+          if (!track?.requestId || !track?.mediaUrl) {
+            if (currentRequestId !== null) {
+              generation++;
+              currentRequestId = null;
+              currentMediaUrl = null;
+              endedRequestId = null;
+              video.pause();
+              video.removeAttribute('src');
+              video.load();
+            }
+            return;
+          }
+
+          const changed =
+            track.requestId !== currentRequestId ||
+            track.mediaUrl !== currentMediaUrl;
+
+          if (changed) {
+            const currentGeneration = ++generation;
+
+            currentRequestId = track.requestId;
+            currentMediaUrl = track.mediaUrl;
+            endedRequestId = null;
+
+            video.pause();
+            video.src = track.mediaUrl;
+            video.load();
+
+            if (
+              Number.isFinite(state.playback?.volume)
+            ) {
+              video.volume = Math.max(
+                0,
+                Math.min(1, state.playback.volume)
+              );
+            }
+
+            video.addEventListener('loadedmetadata', async function onMetadata() {
+              video.removeEventListener('loadedmetadata', onMetadata);
+
+              if (currentGeneration !== generation) return;
+
+              try {
+                await video.play();
+              } catch {
+                // Autoplay may be blocked by the browser.
+              }
+            });
+
+            // Handle media that was already loaded.
+            if (video.readyState >= HTMLMediaElement.HAVE_METADATA) {
+              try {
+                await video.play();
+              } catch {
+                // Autoplay may be blocked by the browser.
+              }
+            }
+          }
+
+          await applyControl(state.control);
+        } catch {
+          // Retry on the next polling cycle.
+        } finally {
+          polling = false;
+        }
+      }
+
+      video.addEventListener('ended', () => {
+        const requestId = currentRequestId;
+
+        if (!requestId || endedRequestId === requestId) return;
+
+        endedRequestId = requestId;
+        void sendEnded(requestId);
+      });
+
+      pollState();
+      setInterval(pollState, POLL_INTERVAL_MS);
+    })();
+  </script>
+</body>
+</html>

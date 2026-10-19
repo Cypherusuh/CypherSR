@@ -1,24 +1,33 @@
+
 <!doctype html>
 <html lang="en">
-
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>StreamOps Player Test</title>
+  <title>StreamOps - Player</title>
+
   <style>
-    * {
-      box-sizing: border-box;
+    :root {
+      color-scheme: dark;
+      --background: #070b12;
+      --surface: #0c1420;
+      --border: rgba(91, 218, 255, 0.22);
+      --cyan: #58ddff;
+      --text: #e8f6ff;
+      --muted: #8297aa;
+      --danger: #ff718b;
     }
 
-    html,
-    body {
+    * { box-sizing: border-box; }
+
+    html, body {
       width: 100%;
       height: 100%;
       margin: 0;
       overflow: hidden;
-      background: #111;
-      color: #fff;
-      font-family: sans-serif;
+      background: transparent;
+      font-family: Inter, "Segoe UI", sans-serif;
+      color: var(--text);
     }
 
     body {
@@ -26,11 +35,15 @@
       flex-direction: column;
     }
 
-    #player-container {
+    .stage {
       position: relative;
+      display: flex;
       flex: 1;
       min-height: 0;
-      background: #000;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      background: var(--background);
     }
 
     video {
@@ -38,314 +51,605 @@
       width: 100%;
       height: 100%;
       object-fit: contain;
+      background: #000;
     }
 
-    #audio-status {
-      display: none;
-      height: 100%;
+    .stage-message {
+      position: absolute;
+      inset: 0;
+      display: flex;
       align-items: center;
       justify-content: center;
-      color: #8be9fd;
-      font-size: 18px;
+      padding: 24px;
+      color: var(--muted);
+      font-size: 13px;
+      letter-spacing: 0.12em;
+      text-align: center;
+      text-transform: uppercase;
+      pointer-events: none;
     }
 
-    body.audio-only video {
-      display: none;
-    }
-
-    body.audio-only #audio-status {
+    .controls {
+      position: relative;
+      z-index: 2;
       display: flex;
-    }
-
-    #controls {
-      display: flex;
+      flex: 0 0 auto;
       flex-direction: column;
       gap: 8px;
-      padding: 10px;
-      background: #181818;
+      padding: 9px 12px;
+      border-top: 1px solid var(--border);
+      background: rgba(7, 11, 18, 0.98);
     }
 
-    .input-row,
-    .button-row {
+    .control-row {
       display: flex;
       align-items: center;
-      gap: 8px;
-    }
-
-    input {
-      width: 100%;
+      gap: 9px;
       min-width: 0;
-      padding: 8px;
-      border: 1px solid #444;
-      border-radius: 4px;
-      background: #222;
-      color: #fff;
     }
 
     button {
-      padding: 7px 10px;
-      border: 1px solid #444;
-      border-radius: 4px;
-      background: #292929;
-      color: #fff;
+      min-height: 34px;
+      padding: 0 12px;
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      background: var(--surface);
+      color: var(--text);
+      font: inherit;
+      font-size: 12px;
+      font-weight: 650;
       cursor: pointer;
       white-space: nowrap;
     }
 
-    button:hover {
-      background: #3a3a3a;
+    button:hover:not(:disabled) {
+      border-color: var(--cyan);
+      background: #112333;
+    }
+
+    button:focus-visible,
+    input:focus-visible {
+      outline: 2px solid var(--cyan);
+      outline-offset: 2px;
     }
 
     button:disabled {
-      opacity: 0.5;
-      cursor: wait;
+      opacity: 0.4;
+      cursor: not-allowed;
     }
 
-    #status {
-      flex: 1;
+    .primary {
+      border-color: rgba(88, 221, 255, 0.55);
+      background: rgba(88, 221, 255, 0.12);
+      color: var(--cyan);
+    }
+
+    .status {
       min-width: 0;
+      flex: 1;
       overflow: hidden;
-      color: #ccc;
-      font-size: 12px;
+      color: var(--muted);
+      font-size: 11px;
       text-overflow: ellipsis;
       white-space: nowrap;
+    }
+
+    .status.error { color: var(--danger); }
+
+    .seek-row {
+      display: grid;
+      grid-template-columns: auto minmax(40px, 1fr) auto;
+      align-items: center;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 10px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .volume-control {
+      display: flex;
+      flex: 0 0 auto;
+      align-items: center;
+      gap: 7px;
+      min-width: 110px;
+    }
+
+    .volume-value {
+      width: 30px;
+      color: var(--muted);
+      font-size: 10px;
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+    }
+
+    input[type="range"] {
+      width: 100%;
+      min-width: 0;
+      height: 16px;
+      margin: 0;
+      accent-color: var(--cyan);
+      cursor: pointer;
+    }
+
+    .seek-row input { width: 100%; }
+
+    body.audio-only {
+      background: transparent;
+    }
+
+    body.audio-only .stage { display: none; }
+
+    body.audio-only .controls {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: rgba(7, 11, 18, 0.98);
+    }
+
+    body.audio-only .status { display: none; }
+
+    @media (max-width: 420px) {
+      .controls { padding: 7px; gap: 7px; }
+      .control-row { gap: 6px; }
+      button { padding: 0 8px; font-size: 11px; }
+      .volume-control { min-width: 80px; gap: 4px; }
     }
   </style>
 </head>
 
 <body>
-  <main id="player-container">
-    <video id="video" controls playsinline preload="metadata"></video>
-    <div id="audio-status">Audio-only mode</div>
+  <main class="stage">
+    <video id="player" playsinline preload="auto"></video>
+    <div id="stageMessage" class="stage-message">
+      Waiting for a song request
+    </div>
   </main>
 
-  <footer id="controls">
-    <form id="prepare-form" class="input-row">
-      <input id="query" type="text" placeholder="YouTube URL or search query" autocomplete="off" required>
-      <button id="prepare-button" type="submit">Prepare</button>
-    </form>
+  <footer class="controls">
+    <div class="seek-row">
+      <span id="elapsed">0:00</span>
+      <input
+        id="seekBar"
+        type="range"
+        min="0"
+        max="100"
+        step="0.1"
+        value="0"
+        aria-label="Seek playback position"
+        disabled
+      >
+      <span id="duration">0:00</span>
+    </div>
 
-    <div class="button-row">
-      <button id="play-button" type="button">Play</button>
-      <button id="mode-button" type="button">Audio only</button>
-      <span id="status">Enter a YouTube URL or search query.</span>
+    <div class="control-row">
+      <button id="playPauseButton" class="primary" disabled>Play</button>
+      <button id="audioOnlyButton" disabled>Audio only</button>
+
+      <div class="volume-control">
+        <button id="muteButton" disabled aria-label="Mute">Mute</button>
+        <input
+          id="volumeBar"
+          type="range"
+          min="0"
+          max="100"
+          step="1"
+          value="100"
+          aria-label="Volume"
+        >
+        <span id="volumeValue" class="volume-value">100%</span>
+      </div>
+
+      <div id="status" class="status" aria-live="polite">
+        Connecting to player...
+      </div>
     </div>
   </footer>
 
   <script>
-    const video = document.querySelector("#video");
-    const form = document.querySelector("#prepare-form");
-    const queryInput = document.querySelector("#query");
-    const prepareButton = document.querySelector("#prepare-button");
-    const playButton = document.querySelector("#play-button");
-    const modeButton = document.querySelector("#mode-button");
-    const status = document.querySelector("#status");
+    (() => {
+      'use strict';
 
-    let audioOnly = false;
-    let requestId = 0;
-    let activeRequestId = null;
+      const POLL_INTERVAL_MS = 500;
+      const TELEMETRY_INTERVAL_MS = 500;
+      const STATE_URL = '/api/player/state';
+      const TELEMETRY_URL = '/api/player/telemetry';
+      const CONTROL_URL = '/api/player/control';
+      const ENDED_URL = '/api/player/ended';
 
-    function setStatus(message) {
-      status.textContent = message;
-    }
+      const video = document.getElementById('player');
+      const stageMessage = document.getElementById('stageMessage');
+      const status = document.getElementById('status');
+      const playPauseButton = document.getElementById('playPauseButton');
+      const audioOnlyButton = document.getElementById('audioOnlyButton');
+      const muteButton = document.getElementById('muteButton');
+      const seekBar = document.getElementById('seekBar');
+      const elapsed = document.getElementById('elapsed');
+      const durationLabel = document.getElementById('duration');
+      const volumeBar = document.getElementById('volumeBar');
+      const volumeValue = document.getElementById('volumeValue');
 
-    function updatePlayButton() {
-      playButton.textContent = video.paused ? "Play" : "Pause";
-    }
+      let currentRequestId = null;
+      let currentMediaUrl = null;
+      let polling = false;
+      let mediaGeneration = 0;
+      let endedRequestId = null;
+      let lastControlRevision = 0;
+      let seeking = false;
+      let volumeChangePending = false;
+      let lastTelemetryAt = 0;
 
-    async function pollPlayerState() {
-      try {
-        const response = await fetch('/api/player/state', {
-          cache: 'no-store',
-        });
+      function setStatus(message, isError = false) {
+        status.textContent = message;
+        status.classList.toggle('error', isError);
+      }
 
-        if (!response.ok) {
-          throw new Error(`Player state returned ${response.status}`);
+      function setStageMessage(message) {
+        stageMessage.textContent = message;
+        stageMessage.hidden = false;
+      }
+
+      function formatTime(seconds) {
+        if (!Number.isFinite(seconds) || seconds < 0) return '0:00';
+
+        const value = Math.floor(seconds);
+        const hours = Math.floor(value / 3600);
+        const minutes = Math.floor((value % 3600) / 60);
+        const remainder = value % 60;
+
+        return hours > 0
+          ? `${hours}:${String(minutes).padStart(2, '0')}:${String(remainder).padStart(2, '0')}`
+          : `${minutes}:${String(remainder).padStart(2, '0')}`;
+      }
+
+      function updateButtons() {
+        const hasTrack = currentRequestId !== null;
+
+        playPauseButton.disabled = !hasTrack;
+        audioOnlyButton.disabled = !hasTrack;
+        muteButton.disabled = !hasTrack;
+        seekBar.disabled = !hasTrack || !Number.isFinite(video.duration);
+
+        playPauseButton.textContent = video.paused ? 'Play' : 'Pause';
+        audioOnlyButton.textContent =
+          document.body.classList.contains('audio-only')
+            ? 'Show video'
+            : 'Audio only';
+
+        muteButton.textContent = video.muted || video.volume === 0
+          ? 'Unmute'
+          : 'Mute';
+      }
+
+      function updateVolumeUI() {
+        volumeBar.value = String(Math.round(video.volume * 100));
+        volumeValue.textContent = `${volumeBar.value}%`;
+        updateButtons();
+      }
+
+      function updateSeekUI() {
+        const position = Number.isFinite(video.currentTime)
+          ? video.currentTime
+          : 0;
+
+        const duration = Number.isFinite(video.duration)
+          ? video.duration
+          : 0;
+
+        elapsed.textContent = formatTime(position);
+        durationLabel.textContent = formatTime(duration);
+
+        if (!seeking && duration > 0) {
+          seekBar.value = String((position / duration) * 100);
         }
 
-        const state = await response.json();
-        const current = state.current;
+        updateButtons();
+      }
 
-        if (!current) {
-          if (activeRequestId !== null) {
-            activeRequestId = null;
+      function setAudioOnly(enabled) {
+        document.body.classList.toggle('audio-only', enabled);
+        updateButtons();
+      }
+
+      function clearCurrentTrack() {
+        mediaGeneration++;
+        currentRequestId = null;
+        currentMediaUrl = null;
+        endedRequestId = null;
+
+        video.pause();
+        video.removeAttribute('src');
+        video.load();
+
+        seekBar.value = '0';
+        elapsed.textContent = '0:00';
+        durationLabel.textContent = '0:00';
+
+        setStageMessage('Waiting for a song request');
+        setStatus('Waiting for a song request');
+        updateButtons();
+      }
+
+      async function sendControl(action, value) {
+        try {
+          const response = await fetch(CONTROL_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action, ...(value === undefined ? {} : { value }) })
+          });
+
+          if (!response.ok) {
+            throw new Error(`Control returned ${response.status}`);
+          }
+        } catch {
+          setStatus('Could not send player control', true);
+        }
+      }
+
+      async function playCurrentTrack() {
+        if (!currentRequestId) return;
+
+        try {
+          await video.play();
+          setStatus('Playing');
+        } catch {
+          setStatus('Playback blocked. Press Play to start.', true);
+        }
+
+        updateButtons();
+      }
+
+      async function applyControl(control) {
+        if (!control || !Number.isSafeInteger(control.revision)) return;
+        if (control.revision <= lastControlRevision) return;
+
+        lastControlRevision = control.revision;
+
+        switch (control.action) {
+          case 'play':
+            await playCurrentTrack();
+            break;
+
+          case 'pause':
             video.pause();
-            video.removeAttribute('src');
-            video.load();
-            updatePlayButton();
-            setStatus('Waiting for a song request...');
+            setStatus('Paused');
+            break;
+
+          case 'seek':
+            if (Number.isFinite(control.value) && Number.isFinite(video.duration)) {
+              video.currentTime = Math.max(
+                0,
+                Math.min(control.value, video.duration)
+              );
+              updateSeekUI();
+            }
+            break;
+
+          case 'volume':
+            if (Number.isFinite(control.value)) {
+              volumeChangePending = true;
+              video.volume = Math.max(0, Math.min(1, control.value));
+              video.muted = control.value === 0;
+              updateVolumeUI();
+              volumeChangePending = false;
+            }
+            break;
+        }
+      }
+
+      async function pollPlayerState() {
+        if (polling) return;
+        polling = true;
+
+        try {
+          const response = await fetch(STATE_URL, { cache: 'no-store' });
+          if (!response.ok) throw new Error(`Player state returned ${response.status}`);
+
+          const state = await response.json();
+          const track = state.current;
+
+          if (!track) {
+            if (currentRequestId !== null || currentMediaUrl !== null) {
+              clearCurrentTrack();
+            } else {
+              setStatus('Waiting for a song request');
+            }
+            return;
           }
 
-          return;
+          if (!track.requestId || !track.mediaUrl) {
+            setStatus('Waiting for playable media');
+            return;
+          }
+
+          const changed =
+            currentRequestId !== track.requestId ||
+            currentMediaUrl !== track.mediaUrl;
+
+          if (changed) {
+            const generation = ++mediaGeneration;
+
+            currentRequestId = track.requestId;
+            currentMediaUrl = track.mediaUrl;
+            endedRequestId = null;
+
+            video.pause();
+            video.src = track.mediaUrl;
+            video.load();
+
+            setStageMessage('Loading media...');
+            setStatus('Loading media...');
+            updateButtons();
+
+            const onMetadata = async () => {
+              video.removeEventListener('loadedmetadata', onMetadata);
+              if (generation !== mediaGeneration) return;
+
+              stageMessage.hidden = true;
+
+              // Restore the latest reported volume when the media changes.
+              if (state.playback && Number.isFinite(state.playback.volume)) {
+                video.volume = Math.max(0, Math.min(1, state.playback.volume));
+                updateVolumeUI();
+              }
+
+              await playCurrentTrack();
+              updateSeekUI();
+            };
+
+            const onError = () => {
+              video.removeEventListener('loadedmetadata', onMetadata);
+              if (generation !== mediaGeneration) return;
+
+              setStageMessage('Unable to play this media');
+              setStatus('Media playback failed', true);
+            };
+
+            video.addEventListener('loadedmetadata', onMetadata);
+            video.addEventListener('error', onError, { once: true });
+
+            if (video.readyState >= HTMLMediaElement.HAVE_METADATA) {
+              await onMetadata();
+            }
+          }
+
+          await applyControl(state.control);
+        } catch {
+          setStatus('Cannot connect to player API', true);
+        } finally {
+          polling = false;
         }
+      }
 
-        if (current.requestId === activeRequestId) {
-          return;
-        }
+      async function publishTelemetry() {
+        if (!currentRequestId || !Number.isFinite(video.currentTime)) return;
 
-        activeRequestId = current.requestId;
-        video.pause();
-        video.src = current.mediaUrl;
-        video.load();
-
-        setStatus(`Now playing: ${current.title}`);
+        const duration = Number.isFinite(video.duration) ? video.duration : 0;
 
         try {
-          await video.play();
-          updatePlayButton();
-        } catch (error) {
-          updatePlayButton();
-          setStatus(`Ready: ${current.title}. Click Play to start.`);
-          console.warn('Automatic playback was blocked:', error);
-        }
-      } catch (error) {
-        console.error('Player state polling failed:', error);
-      }
-    }
+          const response = await fetch(TELEMETRY_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              requestId: currentRequestId,
+              position: video.currentTime,
+              duration,
+              volume: video.volume,
+              paused: video.paused
+            })
+          });
 
-    form.addEventListener("submit", async (event) => {
-      event.preventDefault();
-
-      const query = queryInput.value.trim();
-
-      if (!query) {
-        setStatus("Enter a YouTube URL or search query.");
-        return;
-      }
-
-      const currentRequest = ++requestId;
-
-      video.pause();
-      video.removeAttribute("src");
-      video.load();
-
-      prepareButton.disabled = true;
-      playButton.disabled = true;
-      setStatus("Resolving and converting media. This may take a while...");
-
-      try {
-        const response = await fetch("/api/prepare", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify({ query })
-        });
-
-        const result = await response.json();
-
-        if (currentRequest !== requestId) return;
-
-        if (!response.ok) {
-          throw new Error(result.error || `Request failed (${response.status})`);
-        }
-
-        video.src = result.mediaUrl;
-        video.load();
-
-        setStatus(
-          `Ready: ${result.title}` +
-          (result.uploader ? ` — ${result.uploader}` : "") +
-          ". Click Play."
-        );
-      } catch (error) {
-        if (currentRequest !== requestId) return;
-
-        setStatus(`Prepare failed: ${error.message}`);
-        console.error("Media preparation failed:", error);
-      } finally {
-        if (currentRequest === requestId) {
-          prepareButton.disabled = false;
-          playButton.disabled = false;
+          if (response.ok) lastTelemetryAt = Date.now();
+        } catch {
+          // A temporary telemetry failure must not interrupt playback.
         }
       }
-    });
 
-    playButton.addEventListener("click", async () => {
-      if (video.paused) {
-        if (!video.currentSrc) {
-          setStatus("Prepare a track first.");
-          return;
+      playPauseButton.addEventListener('click', async () => {
+        if (!currentRequestId) return;
+
+        if (video.paused) {
+          await playCurrentTrack();
+          await sendControl('play');
+        } else {
+          video.pause();
+          setStatus('Paused');
+          updateButtons();
+          await sendControl('pause');
         }
+      });
+
+      audioOnlyButton.addEventListener('click', () => {
+        setAudioOnly(!document.body.classList.contains('audio-only'));
+      });
+
+      muteButton.addEventListener('click', async () => {
+        video.muted = !video.muted;
+        if (!video.muted && video.volume === 0) video.volume = 1;
+        updateVolumeUI();
+        await sendControl('volume', video.muted ? 0 : video.volume);
+      });
+
+      volumeBar.addEventListener('input', () => {
+        volumeChangePending = true;
+        video.volume = Number(volumeBar.value) / 100;
+        video.muted = video.volume === 0;
+        updateVolumeUI();
+        volumeChangePending = false;
+      });
+
+      volumeBar.addEventListener('change', async () => {
+        await sendControl('volume', video.muted ? 0 : video.volume);
+      });
+
+      seekBar.addEventListener('input', () => {
+        seeking = true;
+
+        const duration = Number.isFinite(video.duration) ? video.duration : 0;
+        const target = duration * (Number(seekBar.value) / 100);
+
+        elapsed.textContent = formatTime(target);
+      });
+
+      seekBar.addEventListener('change', async () => {
+        const duration = Number.isFinite(video.duration) ? video.duration : 0;
+        const target = duration * (Number(seekBar.value) / 100);
+
+        if (duration > 0) {
+          video.currentTime = Math.max(0, Math.min(target, duration));
+          await sendControl('seek', video.currentTime);
+        }
+
+        seeking = false;
+        updateSeekUI();
+      });
+
+      video.addEventListener('timeupdate', updateSeekUI);
+      video.addEventListener('durationchange', updateSeekUI);
+      video.addEventListener('volumechange', updateVolumeUI);
+      video.addEventListener('play', updateButtons);
+      video.addEventListener('pause', updateButtons);
+
+      video.addEventListener('ended', async () => {
+        const requestId = currentRequestId;
+        if (!requestId || endedRequestId === requestId) return;
+
+        endedRequestId = requestId;
+        setStatus('Track finished');
 
         try {
-          await video.play();
-          updatePlayButton();
-          setStatus(audioOnly ? "Playing audio" : "Playing video");
-        } catch (error) {
-          setStatus(`Playback failed: ${error.message}`);
-          console.error("Playback failed:", error);
-        }
-      } else {
-        video.pause();
-        updatePlayButton();
-        setStatus("Paused");
-      }
-    });
+          const response = await fetch(ENDED_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ requestId })
+          });
 
-    modeButton.addEventListener("click", () => {
-      audioOnly = !audioOnly;
-
-      document.body.classList.toggle("audio-only", audioOnly);
-      modeButton.textContent = audioOnly ? "Show video" : "Audio only";
-
-      if (video.currentSrc) {
-        setStatus(audioOnly ? "Audio-only mode" : "Video mode");
-      }
-    });
-
-    video.addEventListener("play", updatePlayButton);
-    video.addEventListener("pause", updatePlayButton);
-
-    video.addEventListener('ended', async () => {
-      updatePlayButton();
-
-      const requestId = activeRequestId;
-
-      if (!requestId) {
-        setStatus('Playback ended.');
-        return;
-      }
-
-      try {
-        const response = await fetch('/api/player/ended', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ requestId }),
-        });
-
-        if (!response.ok) {
-          throw new Error(`End notification returned ${response.status}`);
+          if (!response.ok) throw new Error(`Track completion returned ${response.status}`);
+        } catch {
+          setStatus('Could not notify server that track ended', true);
         }
 
-        const result = await response.json();
+        updateButtons();
+        await pollPlayerState();
+      });
 
-        if (!result.accepted) {
-          console.warn('Ignored a stale playback-ended notification.');
-        }
-      } catch (error) {
-        console.error('Failed to notify the backend:', error);
-        setStatus('Could not advance the queue. Check the backend logs.');
-      }
-    });
+      video.addEventListener('waiting', () => {
+        if (currentRequestId) setStatus('Buffering...');
+      });
 
-    video.addEventListener("error", () => {
-      const error = video.error;
+      video.addEventListener('playing', () => {
+        if (currentRequestId) setStatus('Playing');
+      });
 
-      setStatus(
-        error
-          ? `Video failed (code ${error.code}): ${error.message || "No details"}`
-          : "Video playback failed."
-      );
-    });
+      video.addEventListener('error', () => {
+        if (currentRequestId) setStatus('Media playback failed', true);
+      });
 
-    void pollPlayerState();
-    setInterval(() => {
-      void pollPlayerState();
-    }, 750);
+      updateButtons();
+      updateVolumeUI();
+      pollPlayerState();
+
+      setInterval(pollPlayerState, POLL_INTERVAL_MS);
+      setInterval(publishTelemetry, TELEMETRY_INTERVAL_MS);
+    })();
   </script>
 </body>
-
 </html>

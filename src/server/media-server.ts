@@ -1,3 +1,4 @@
+
 import { createReadStream } from 'node:fs';
 import { readFile, stat } from 'node:fs/promises';
 import {
@@ -9,16 +10,52 @@ import { isAbsolute, resolve } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 
 import type { TrackResolver } from '../queue/track-resolver.js';
-import type { PreparedMedia, MediaTranscoder } from '../playback/media-transcoder.js';
+import type {
+    PreparedMedia,
+    MediaTranscoder,
+} from '../playback/media-transcoder.js';
 import type { PlaybackCoordinator } from '../playback/playback-coordinator.js';
 
 const MAX_BODY_BYTES = 8 * 1024;
+
+type PlayerControlAction = 'play' | 'pause' | 'seek' | 'volume';
+
+interface PlayerControl {
+    revision: number;
+    action: PlayerControlAction;
+    value?: number;
+}
+
+interface PlaybackRuntime {
+    requestId: string | null;
+    position: number;
+    duration: number;
+    volume: number;
+    paused: boolean;
+    updatedAt: number;
+}
 
 export class MediaServer {
     private readonly server;
     private readonly mediaDir: string;
     private readonly playerPath: string;
+    private readonly testPlayerPath: string;
+    private readonly queuePath: string;
+    private readonly playedNowPath: string;
     private readonly media = new Map<string, PreparedMedia>();
+    private playbackCoordinator: PlaybackCoordinator | null = null;
+
+    private playbackRuntime: PlaybackRuntime = {
+        requestId: null,
+        position: 0,
+        duration: 0,
+        volume: 1,
+        paused: true,
+        updatedAt: Date.now(),
+    };
+
+    private controlRevision = 0;
+    private pendingControl: PlayerControl | null = null;
 
     constructor(
         private readonly host: string,
@@ -28,7 +65,10 @@ export class MediaServer {
         private readonly transcoder: MediaTranscoder,
     ) {
         this.mediaDir = resolve(mediaDir);
-        this.playerPath = resolve('public/player-test.html');
+        this.playerPath = resolve('public/player.html');
+        this.testPlayerPath = resolve('public/player-test.html');
+        this.queuePath = resolve('public/queue.html');
+        this.playedNowPath = resolve('public/played-now.html');
 
         this.server = createServer((request, response) => {
             void this.handleRequest(request, response).catch((error: unknown) => {
@@ -74,8 +114,6 @@ export class MediaServer {
         });
     }
 
-    private playbackCoordinator: PlaybackCoordinator | null = null;
-
     attachPlaybackCoordinator(coordinator: PlaybackCoordinator): void {
         this.playbackCoordinator = coordinator;
     }
@@ -84,7 +122,9 @@ export class MediaServer {
         const expectedPath = resolve(this.mediaDir, `${media.id}.mp4`);
 
         if (!isAbsolute(media.path) || resolve(media.path) !== expectedPath) {
-            throw new Error('Media path is outside the configured media directory.');
+            throw new Error(
+                'Media path is outside the configured media directory.',
+            );
         }
 
         this.media.set(media.id, media);
@@ -94,75 +134,37 @@ export class MediaServer {
         this.media.delete(mediaId);
     }
 
-    private async handlePlayerEnded(
-        request: IncomingMessage,
-        response: ServerResponse,
-    ): Promise<void> {
-        if (!this.playbackCoordinator) {
-            this.sendError(response, 503, 'Playback is not initialized');
-            return;
-        }
-
-        let body = '';
-
-        for await (const chunk of request) {
-            body += chunk.toString();
-
-            if (Buffer.byteLength(body, 'utf8') > MAX_BODY_BYTES) {
-                this.sendError(response, 413, 'Request body too large');
-                return;
-            }
-        }
-
-        let payload: unknown;
-
-        try {
-            payload = JSON.parse(body);
-        } catch {
-            this.sendError(response, 400, 'Invalid JSON body');
-            return;
-        }
-
-        if (
-            typeof payload !== 'object' ||
-            payload === null ||
-            !('requestId' in payload) ||
-            typeof payload.requestId !== 'string'
-        ) {
-            this.sendError(response, 400, 'A requestId is required');
-            return;
-        }
-
-        const accepted = await this.playbackCoordinator.trackEnded(
-            payload.requestId,
-        );
-
-        this.sendJson(response, 200, { accepted });
-    }
-
     private async handleRequest(
         request: IncomingMessage,
         response: ServerResponse,
     ): Promise<void> {
         const url = new URL(request.url ?? '/', 'http://localhost');
 
-        if (url.pathname === '/' || url.pathname === '/player-test.html') {
-            if (request.method !== 'GET' && request.method !== 'HEAD') {
-                response.setHeader('Allow', 'GET, HEAD');
-                this.sendError(response, 405, 'Method not allowed');
-                return;
-            }
+        if (url.pathname === '/') {
+            await this.handleHtmlPage(request, response, this.testPlayerPath);
+            return;
+        }
 
-            const html = await readFile(this.playerPath);
+        if (
+            url.pathname === '/player' ||
+            url.pathname === '/player.html'
+        ) {
+            await this.handleHtmlPage(request, response, this.playerPath);
+            return;
+        }
 
-            response.writeHead(200, {
-                'Content-Type': 'text/html; charset=utf-8',
-                'Content-Length': html.length,
-                'Cache-Control': 'no-store',
-                'X-Content-Type-Options': 'nosniff',
-            });
+        if (url.pathname === '/player-test.html') {
+            await this.handleHtmlPage(request, response, this.testPlayerPath);
+            return;
+        }
 
-            response.end(request.method === 'HEAD' ? undefined : html);
+        if (url.pathname === '/played-now.html') {
+            await this.handleHtmlPage(request, response, this.playedNowPath);
+            return;
+        }
+
+        if (url.pathname === '/queue.html') {
+            await this.handleHtmlPage(request, response, this.queuePath);
             return;
         }
 
@@ -174,6 +176,22 @@ export class MediaServer {
             }
 
             await this.handlePrepare(request, response);
+            return;
+        }
+
+        if (url.pathname === '/api/queue') {
+            if (request.method !== 'GET') {
+                response.setHeader('Allow', 'GET');
+                this.sendError(response, 405, 'Method not allowed');
+                return;
+            }
+
+            if (!this.playbackCoordinator) {
+                this.sendError(response, 503, 'Playback is not initialized');
+                return;
+            }
+
+            this.sendJson(response, 200, this.playbackCoordinator.getQueue());
             return;
         }
 
@@ -189,11 +207,35 @@ export class MediaServer {
                 return;
             }
 
-            this.sendJson(
-                response,
-                200,
-                this.playbackCoordinator.getPlayerState(''),
-            );
+            const playerState = this.playbackCoordinator.getPlayerState('');
+            const current = playerState.current;
+            const runtime = this.playbackRuntime;
+
+            if (current && runtime.requestId !== current.requestId) {
+                this.playbackRuntime = {
+                    ...runtime,
+                    requestId: current.requestId,
+                    position: 0,
+                    duration: current.duration ?? 0,
+                    paused: true,
+                    updatedAt: Date.now(),
+                };
+            } else if (!current && runtime.requestId !== null) {
+                this.playbackRuntime = {
+                    ...runtime,
+                    requestId: null,
+                    position: 0,
+                    duration: 0,
+                    paused: true,
+                    updatedAt: Date.now(),
+                };
+            }
+
+            this.sendJson(response, 200, {
+                ...playerState,
+                playback: this.playbackRuntime,
+                control: this.pendingControl,
+            });
             return;
         }
 
@@ -208,6 +250,28 @@ export class MediaServer {
             return;
         }
 
+        if (url.pathname === '/api/player/telemetry') {
+            if (request.method !== 'POST') {
+                response.setHeader('Allow', 'POST');
+                this.sendError(response, 405, 'Method not allowed');
+                return;
+            }
+
+            await this.handlePlayerTelemetry(request, response);
+            return;
+        }
+
+        if (url.pathname === '/api/player/control') {
+            if (request.method !== 'POST') {
+                response.setHeader('Allow', 'POST');
+                this.sendError(response, 405, 'Method not allowed');
+                return;
+            }
+
+            await this.handlePlayerControl(request, response);
+            return;
+        }
+
         if (url.pathname.startsWith('/api/media/')) {
             await this.handleMediaRequest(request, response, url.pathname);
             return;
@@ -216,10 +280,33 @@ export class MediaServer {
         this.sendError(response, 404, 'Not found');
     }
 
-    private async handlePrepare(
+    private async handleHtmlPage(
         request: IncomingMessage,
         response: ServerResponse,
+        filePath: string,
     ): Promise<void> {
+        if (request.method !== 'GET' && request.method !== 'HEAD') {
+            response.setHeader('Allow', 'GET, HEAD');
+            this.sendError(response, 405, 'Method not allowed');
+            return;
+        }
+
+        const html = await readFile(filePath);
+
+        response.writeHead(200, {
+            'Content-Type': 'text/html; charset=utf-8',
+            'Content-Length': html.length,
+            'Cache-Control': 'no-store',
+            'X-Content-Type-Options': 'nosniff',
+        });
+
+        response.end(request.method === 'HEAD' ? undefined : html);
+    }
+
+    private async readJsonBody(
+        request: IncomingMessage,
+        response: ServerResponse,
+    ): Promise<Record<string, unknown> | null> {
         let body = '';
 
         for await (const chunk of request) {
@@ -228,25 +315,215 @@ export class MediaServer {
             if (Buffer.byteLength(body, 'utf8') > MAX_BODY_BYTES) {
                 this.sendError(response, 413, 'Request body too large');
                 request.destroy();
-                return;
+                return null;
             }
         }
 
-        let query: unknown;
-
         try {
-            const parsed: unknown = JSON.parse(body);
-            query =
-                typeof parsed === 'object' && parsed !== null && 'query' in parsed
-                    ? parsed.query
-                    : undefined;
+            const payload: unknown = JSON.parse(body);
+
+            if (
+                typeof payload !== 'object' ||
+                payload === null ||
+                Array.isArray(payload)
+            ) {
+                this.sendError(response, 400, 'Expected a JSON object');
+                return null;
+            }
+
+            return payload as Record<string, unknown>;
         } catch {
             this.sendError(response, 400, 'Invalid JSON body');
+            return null;
+        }
+    }
+
+    private async handlePlayerEnded(
+        request: IncomingMessage,
+        response: ServerResponse,
+    ): Promise<void> {
+        if (!this.playbackCoordinator) {
+            this.sendError(response, 503, 'Playback is not initialized');
             return;
         }
 
+        const payload = await this.readJsonBody(request, response);
+        if (!payload) return;
+
+        if (typeof payload.requestId !== 'string') {
+            this.sendError(response, 400, 'A requestId is required');
+            return;
+        }
+
+        const accepted = await this.playbackCoordinator.trackEnded(
+            payload.requestId,
+        );
+
+        if (accepted && this.playbackRuntime.requestId === payload.requestId) {
+            this.playbackRuntime = {
+                ...this.playbackRuntime,
+                requestId: null,
+                position: 0,
+                duration: 0,
+                paused: true,
+                updatedAt: Date.now(),
+            };
+        }
+
+        this.sendJson(response, 200, { accepted });
+    }
+
+    private async handlePlayerTelemetry(
+        request: IncomingMessage,
+        response: ServerResponse,
+    ): Promise<void> {
+        if (!this.playbackCoordinator) {
+            this.sendError(response, 503, 'Playback is not initialized');
+            return;
+        }
+
+        const payload = await this.readJsonBody(request, response);
+        if (!payload) return;
+
+        const { requestId, position, duration, volume, paused } = payload;
+
+        if (
+            typeof requestId !== 'string' ||
+            typeof position !== 'number' ||
+            !Number.isFinite(position) ||
+            position < 0 ||
+            typeof duration !== 'number' ||
+            !Number.isFinite(duration) ||
+            duration < 0 ||
+            typeof volume !== 'number' ||
+            !Number.isFinite(volume) ||
+            volume < 0 ||
+            volume > 1 ||
+            typeof paused !== 'boolean'
+        ) {
+            this.sendError(response, 400, 'Invalid playback telemetry');
+            return;
+        }
+
+        const current = this.playbackCoordinator.getPlayerState('').current;
+
+        if (!current || current.requestId !== requestId) {
+            this.sendJson(response, 409, { accepted: false });
+            return;
+        }
+
+        this.playbackRuntime = {
+            requestId,
+            position: Math.min(position, duration || position),
+            duration,
+            volume,
+            paused,
+            updatedAt: Date.now(),
+        };
+
+        this.sendJson(response, 200, { accepted: true });
+    }
+
+    private async handlePlayerControl(
+        request: IncomingMessage,
+        response: ServerResponse,
+    ): Promise<void> {
+        if (!this.playbackCoordinator) {
+            this.sendError(response, 503, 'Playback is not initialized');
+            return;
+        }
+
+        const payload = await this.readJsonBody(request, response);
+        if (!payload) return;
+
+        const action = payload.action;
+        const value = payload.value;
+
+        if (
+            action !== 'play' &&
+            action !== 'pause' &&
+            action !== 'seek' &&
+            action !== 'volume'
+        ) {
+            this.sendError(response, 400, 'Unsupported player control action');
+            return;
+        }
+
+        if (action === 'seek') {
+            if (
+                typeof value !== 'number' ||
+                !Number.isFinite(value) ||
+                value < 0
+            ) {
+                this.sendError(response, 400, 'Seek value must be non-negative');
+                return;
+            }
+
+            if (this.playbackRuntime.duration > 0) {
+                this.playbackRuntime.position = Math.min(
+                    value,
+                    this.playbackRuntime.duration,
+                );
+            } else {
+                this.playbackRuntime.position = value;
+            }
+        }
+
+        if (action === 'volume') {
+            if (
+                typeof value !== 'number' ||
+                !Number.isFinite(value) ||
+                value < 0 ||
+                value > 1
+            ) {
+                this.sendError(response, 400, 'Volume must be between 0 and 1');
+                return;
+            }
+
+            this.playbackRuntime = {
+                ...this.playbackRuntime,
+                volume: value,
+                updatedAt: Date.now(),
+            };
+        }
+
+        if (action === 'play') {
+            this.playbackRuntime.paused = false;
+            this.playbackRuntime.updatedAt = Date.now();
+        }
+
+        if (action === 'pause') {
+            this.playbackRuntime.paused = true;
+            this.playbackRuntime.updatedAt = Date.now();
+        }
+
+        this.pendingControl = {
+            revision: ++this.controlRevision,
+            action,
+            ...(typeof value === 'number' ? { value } : {}),
+        };
+
+        this.sendJson(response, 202, {
+            accepted: true,
+            control: this.pendingControl,
+        });
+    }
+
+    private async handlePrepare(
+        request: IncomingMessage,
+        response: ServerResponse,
+    ): Promise<void> {
+        const payload = await this.readJsonBody(request, response);
+        if (!payload) return;
+
+        const query = payload.query;
+
         if (typeof query !== 'string' || !query.trim()) {
-            this.sendError(response, 400, 'A YouTube URL or search query is required');
+            this.sendError(
+                response,
+                400,
+                'A YouTube URL or search query is required',
+            );
             return;
         }
 
@@ -278,7 +555,11 @@ export class MediaServer {
                 parsedUrl.username ||
                 parsedUrl.password
             ) {
-                this.sendError(response, 400, 'Only YouTube URLs are supported');
+                this.sendError(
+                    response,
+                    400,
+                    'Only YouTube URLs are supported',
+                );
                 return;
             }
         }
@@ -384,7 +665,10 @@ export class MediaServer {
             return;
         }
 
-        await pipeline(createReadStream(media.path, { start, end }), response);
+        await pipeline(
+            createReadStream(media.path, { start, end }),
+            response,
+        );
     }
 
     private parseRange(
