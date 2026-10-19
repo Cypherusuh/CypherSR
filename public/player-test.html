@@ -1,17 +1,14 @@
+
 <!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>StreamOps Player Test</title>
-
   <style>
-    * {
-      box-sizing: border-box;
-    }
+    * { box-sizing: border-box; }
 
-    html,
-    body {
+    html, body {
       width: 100%;
       height: 100%;
       margin: 0;
@@ -46,29 +43,46 @@
       align-items: center;
       justify-content: center;
       color: #8be9fd;
-      font-size: 16px;
+      font-size: 18px;
     }
+
+    body.audio-only video { display: none; }
+    body.audio-only #audio-status { display: flex; }
 
     #controls {
       display: flex;
-      align-items: center;
+      flex-direction: column;
       gap: 8px;
-      padding: 8px;
+      padding: 10px;
       background: #181818;
     }
 
+    .url-row, .button-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    input {
+      flex: 1;
+      min-width: 0;
+      padding: 8px;
+      border: 1px solid #444;
+      border-radius: 4px;
+      background: #222;
+      color: #fff;
+    }
+
     button {
-      padding: 6px 10px;
+      padding: 7px 10px;
       border: 1px solid #444;
       border-radius: 4px;
       background: #292929;
-      color: white;
+      color: #fff;
       cursor: pointer;
     }
 
-    button:hover {
-      background: #3a3a3a;
-    }
+    button:hover { background: #3a3a3a; }
 
     #status {
       flex: 1;
@@ -79,120 +93,234 @@
       text-overflow: ellipsis;
       white-space: nowrap;
     }
-
-    body.audio-only #player-container {
-      display: none;
-    }
-
-    body.audio-only #audio-status {
-      display: flex;
-      flex: 1;
-    }
   </style>
 </head>
-
 <body>
   <main id="player-container">
-    <video id="video" controls autoplay playsinline></video>
+    <video id="video" controls playsinline preload="metadata"></video>
     <div id="audio-status">Audio-only mode</div>
   </main>
 
-  <audio id="audio" preload="auto"></audio>
+  <audio id="audio" preload="metadata"></audio>
 
   <footer id="controls">
-    <button id="play-button" type="button">Play</button>
-    <button id="mode-button" type="button">Audio only</button>
-    <span id="status">Waiting for media URL...</span>
+    <div class="url-row">
+      <input
+        id="video-url"
+        type="url"
+        placeholder="Video media URL (e.g. yt-dlp format 133)"
+      >
+    </div>
+
+    <div class="url-row">
+      <input
+        id="audio-url"
+        type="url"
+        placeholder="Optional audio media URL (e.g. yt-dlp format 140)"
+      >
+    </div>
+
+    <div class="button-row">
+      <button id="load-button" type="button">Load URLs</button>
+      <button id="play-button" type="button">Play</button>
+      <button id="mode-button" type="button">Audio only</button>
+      <span id="status">Enter a media URL to begin.</span>
+    </div>
   </footer>
 
   <script>
-    // Replace this with a freshly extracted URL from yt-dlp.
-    const MEDIA_URL = "PASTE_FRESH_MEDIA_URL_HERE";
-
     const video = document.querySelector("#video");
     const audio = document.querySelector("#audio");
+    const videoUrlInput = document.querySelector("#video-url");
+    const audioUrlInput = document.querySelector("#audio-url");
+    const loadButton = document.querySelector("#load-button");
     const playButton = document.querySelector("#play-button");
     const modeButton = document.querySelector("#mode-button");
     const status = document.querySelector("#status");
 
     let audioOnly = false;
+    let playbackRequest = 0;
+
+    function currentPlayer() {
+      return audioOnly ? audio : video;
+    }
 
     function setStatus(message) {
       status.textContent = message;
     }
 
+    function updatePlayButton() {
+      playButton.textContent = currentPlayer().paused ? "Play" : "Pause";
+    }
+
+    function loadMedia() {
+      playbackRequest++;
+
+      video.pause();
+      audio.pause();
+
+      const videoUrl = videoUrlInput.value.trim();
+      const audioUrl = audioUrlInput.value.trim();
+
+      video.removeAttribute("src");
+      audio.removeAttribute("src");
+      video.load();
+      audio.load();
+
+      if (!videoUrl && !audioUrl) {
+        setStatus("Enter a video or audio media URL.");
+        return;
+      }
+
+      if (videoUrl) {
+        video.src = videoUrl;
+        video.load();
+      }
+
+      if (audioUrl) {
+        audio.src = audioUrl;
+        audio.load();
+      }
+
+      playButton.textContent = "Play";
+
+      if (audioOnly && !audioUrl) {
+        setStatus("No audio URL provided. Switch to video mode.");
+      } else {
+        setStatus("URL loaded. Click Play.");
+      }
+    }
+
     async function playCurrentMedia() {
-      const player = audioOnly ? audio : video;
+      const player = currentPlayer();
+      const requestId = ++playbackRequest;
+
+      if (!player.currentSrc) {
+        setStatus(
+          audioOnly
+            ? "Enter an audio URL and click Load URLs."
+            : "Enter a video URL and click Load URLs."
+        );
+        return;
+      }
 
       try {
         await player.play();
-        playButton.textContent = "Pause";
-        setStatus(audioOnly ? "Playing audio only" : "Playing video + audio");
+
+        if (
+          requestId !== playbackRequest ||
+          player !== currentPlayer()
+        ) {
+          return;
+        }
+
+        updatePlayButton();
+        setStatus(audioOnly ? "Playing audio" : "Playing video");
       } catch (error) {
-        setStatus("Playback blocked. Click Play to retry.");
+        if (requestId !== playbackRequest) return;
+
+        if (error.name === "AbortError") {
+          return;
+        }
+
+        setStatus(`Playback failed: ${error.message}`);
         console.error("Playback failed:", error);
       }
     }
 
     playButton.addEventListener("click", async () => {
-      const player = audioOnly ? audio : video;
+      const player = currentPlayer();
 
       if (player.paused) {
         await playCurrentMedia();
       } else {
+        playbackRequest++;
         player.pause();
-        playButton.textContent = "Play";
+        updatePlayButton();
         setStatus("Paused");
       }
     });
 
-    modeButton.addEventListener("click", async () => {
-      const oldPlayer = audioOnly ? audio : video;
-      const newAudioOnly = !audioOnly;
-      const newPlayer = newAudioOnly ? audio : video;
+    loadButton.addEventListener("click", loadMedia);
+
+    modeButton.addEventListener("click", () => {
+      playbackRequest++;
+
+      const oldPlayer = currentPlayer();
       const currentTime = oldPlayer.currentTime || 0;
+      const wasPlaying = !oldPlayer.paused;
 
       oldPlayer.pause();
-      audioOnly = newAudioOnly;
+      audioOnly = !audioOnly;
 
       document.body.classList.toggle("audio-only", audioOnly);
       modeButton.textContent = audioOnly ? "Show video" : "Audio only";
 
-      newPlayer.currentTime = currentTime;
-      playButton.textContent = "Play";
+      const newPlayer = currentPlayer();
 
-      setStatus(audioOnly ? "Audio-only mode selected" : "Video mode selected");
+      if (!newPlayer.currentSrc) {
+        playButton.textContent = "Play";
+        setStatus(
+          audioOnly
+            ? "Enter an audio URL and click Load URLs."
+            : "Enter a video URL and click Load URLs."
+        );
+        return;
+      }
 
-      // Don't force autoplay when switching modes. Let the user press Play.
+      const seekTo = () => {
+        try {
+          if (Number.isFinite(newPlayer.duration)) {
+            newPlayer.currentTime = Math.min(
+              currentTime,
+              Math.max(0, newPlayer.duration - 0.1)
+            );
+          }
+        } catch {
+          // Seeking may not be possible until media metadata loads.
+        }
+
+        if (wasPlaying) {
+          void playCurrentMedia();
+        } else {
+          updatePlayButton();
+          setStatus(audioOnly ? "Audio-only mode" : "Video mode");
+        }
+      };
+
+      if (newPlayer.readyState >= 1) {
+        seekTo();
+      } else {
+        newPlayer.addEventListener("loadedmetadata", seekTo, { once: true });
+      }
     });
 
-    video.addEventListener("error", () => {
-      setStatus("Video failed to load. The URL may have expired.");
-    });
+    for (const [name, player] of [
+      ["Video", video],
+      ["Audio", audio]
+    ]) {
+      player.addEventListener("error", () => {
+        if (player !== currentPlayer()) return;
 
-    audio.addEventListener("error", () => {
-      setStatus("Audio failed to load. Check the media URL.");
-    });
+        const mediaError = player.error;
+        const details = mediaError
+          ? `code ${mediaError.code}: ${mediaError.message || "No details"}`
+          : "Unknown media error";
 
-    video.addEventListener("ended", () => {
-      playButton.textContent = "Play";
-      setStatus("Video ended");
-    });
+        setStatus(`${name} failed: ${details}`);
+        console.error(`${name} media error:`, mediaError);
+      });
 
-    audio.addEventListener("ended", () => {
-      playButton.textContent = "Play";
-      setStatus("Audio ended");
-    });
+      player.addEventListener("ended", () => {
+        if (player !== currentPlayer()) return;
 
-    if (
-      !MEDIA_URL ||
-      MEDIA_URL === "PASTE_FRESH_MEDIA_URL_HERE"
-    ) {
-      setStatus("Paste a fresh media URL into MEDIA_URL.");
-    } else {
-      video.src = MEDIA_URL;
-      audio.src = MEDIA_URL;
-      setStatus("Media URL loaded. Click Play if autoplay is blocked.");
+        playbackRequest++;
+        playButton.textContent = "Play";
+        setStatus(`${name} ended`);
+      });
+
+      player.addEventListener("play", updatePlayButton);
+      player.addEventListener("pause", updatePlayButton);
     }
   </script>
 </body>

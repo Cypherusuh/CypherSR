@@ -1,3 +1,4 @@
+
 export interface SongRequestConfig {
   twitch: {
     clientId: string;
@@ -14,9 +15,17 @@ export interface SongRequestConfig {
     prefix: string;
   };
 
+  server: {
+    host: string;
+    port: number;
+  };
+
   playback: {
     radioUrl?: string;
     mpvPath: string;
     ytDlpPath: string;
+    ffmpegPath: string;
+    mediaDir: string;
+    maxVideoHeight: number;
   };
 }

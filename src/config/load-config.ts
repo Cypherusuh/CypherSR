@@ -43,10 +43,19 @@ export function loadConfig(): SongRequestConfig {
       prefix: process.env.COMMAND_PREFIX?.trim() || '!',
     },
 
+    server: {
+      host: process.env.SONG_REQUEST_HOST?.trim() || '127.0.0.1',
+      port: positiveIntegerEnv('SONG_REQUEST_PORT', 8765),
+    },
+
     playback: {
       radioUrl: process.env.RADIO_URL?.trim() || undefined,
       mpvPath: process.env.MPV_PATH?.trim() || 'mpv',
       ytDlpPath: process.env.YT_DLP_PATH?.trim() || 'yt-dlp',
+      ffmpegPath: process.env.FFMPEG_PATH?.trim() || 'ffmpeg',
+      mediaDir:
+        process.env.SONG_REQUEST_MEDIA_DIR?.trim() || '.cache/song-request/media',
+      maxVideoHeight: positiveIntegerEnv('SONG_REQUEST_MAX_VIDEO_HEIGHT', 360),
     },
   };
 }
