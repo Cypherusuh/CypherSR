@@ -36,3 +36,6 @@ export { TrackResolver } from './queue/track-resolver.js';
 export { SongRequestQueue } from './queue/song-request-queue.js';
 export type { MediaMode, ResolvedMedia } from './playback/media-types.js';
 export { MediaResolver } from './playback/media-resolver.js';
+export { MediaTranscoder } from './playback/media-transcoder.js';
+export type { PreparedMedia } from './playback/media-transcoder.js';
+export { MediaServer } from './server/media-server.js';
