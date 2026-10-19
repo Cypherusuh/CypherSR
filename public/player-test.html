@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>StreamOps Player Test</title>
+
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+      background: #111;
+      color: #fff;
+      font-family: sans-serif;
+    }
+
+    body {
+      display: flex;
+      flex-direction: column;
+    }
+
+    #player-container {
+      position: relative;
+      flex: 1;
+      min-height: 0;
+      background: #000;
+    }
+
+    video {
+      display: block;
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+    }
+
+    #audio-status {
+      display: none;
+      height: 100%;
+      align-items: center;
+      justify-content: center;
+      color: #8be9fd;
+      font-size: 16px;
+    }
+
+    #controls {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px;
+      background: #181818;
+    }
+
+    button {
+      padding: 6px 10px;
+      border: 1px solid #444;
+      border-radius: 4px;
+      background: #292929;
+      color: white;
+      cursor: pointer;
+    }
+
+    button:hover {
+      background: #3a3a3a;
+    }
+
+    #status {
+      flex: 1;
+      min-width: 0;
+      overflow: hidden;
+      color: #ccc;
+      font-size: 12px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    body.audio-only #player-container {
+      display: none;
+    }
+
+    body.audio-only #audio-status {
+      display: flex;
+      flex: 1;
+    }
+  </style>
+</head>
+
+<body>
+  <main id="player-container">
+    <video id="video" controls autoplay playsinline></video>
+    <div id="audio-status">Audio-only mode</div>
+  </main>
+
+  <audio id="audio" preload="auto"></audio>
+
+  <footer id="controls">
+    <button id="play-button" type="button">Play</button>
+    <button id="mode-button" type="button">Audio only</button>
+    <span id="status">Waiting for media URL...</span>
+  </footer>
+
+  <script>
+    // Replace this with a freshly extracted URL from yt-dlp.
+    const MEDIA_URL = "PASTE_FRESH_MEDIA_URL_HERE";
+
+    const video = document.querySelector("#video");
+    const audio = document.querySelector("#audio");
+    const playButton = document.querySelector("#play-button");
+    const modeButton = document.querySelector("#mode-button");
+    const status = document.querySelector("#status");
+
+    let audioOnly = false;
+
+    function setStatus(message) {
+      status.textContent = message;
+    }
+
+    async function playCurrentMedia() {
+      const player = audioOnly ? audio : video;
+
+      try {
+        await player.play();
+        playButton.textContent = "Pause";
+        setStatus(audioOnly ? "Playing audio only" : "Playing video + audio");
+      } catch (error) {
+        setStatus("Playback blocked. Click Play to retry.");
+        console.error("Playback failed:", error);
+      }
+    }
+
+    playButton.addEventListener("click", async () => {
+      const player = audioOnly ? audio : video;
+
+      if (player.paused) {
+        await playCurrentMedia();
+      } else {
+        player.pause();
+        playButton.textContent = "Play";
+        setStatus("Paused");
+      }
+    });
+
+    modeButton.addEventListener("click", async () => {
+      const oldPlayer = audioOnly ? audio : video;
+      const newAudioOnly = !audioOnly;
+      const newPlayer = newAudioOnly ? audio : video;
+      const currentTime = oldPlayer.currentTime || 0;
+
+      oldPlayer.pause();
+      audioOnly = newAudioOnly;
+
+      document.body.classList.toggle("audio-only", audioOnly);
+      modeButton.textContent = audioOnly ? "Show video" : "Audio only";
+
+      newPlayer.currentTime = currentTime;
+      playButton.textContent = "Play";
+
+      setStatus(audioOnly ? "Audio-only mode selected" : "Video mode selected");
+
+      // Don't force autoplay when switching modes. Let the user press Play.
+    });
+
+    video.addEventListener("error", () => {
+      setStatus("Video failed to load. The URL may have expired.");
+    });
+
+    audio.addEventListener("error", () => {
+      setStatus("Audio failed to load. Check the media URL.");
+    });
+
+    video.addEventListener("ended", () => {
+      playButton.textContent = "Play";
+      setStatus("Video ended");
+    });
+
+    audio.addEventListener("ended", () => {
+      playButton.textContent = "Play";
+      setStatus("Audio ended");
+    });
+
+    if (
+      !MEDIA_URL ||
+      MEDIA_URL === "PASTE_FRESH_MEDIA_URL_HERE"
+    ) {
+      setStatus("Paste a fresh media URL into MEDIA_URL.");
+    } else {
+      video.src = MEDIA_URL;
+      audio.src = MEDIA_URL;
+      setStatus("Media URL loaded. Click Play if autoplay is blocked.");
+    }
+  </script>
+</body>
+</html>
