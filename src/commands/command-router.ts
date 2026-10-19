@@ -42,12 +42,20 @@ export class CommandRouter {
       return;
     }
 
-    const [name, ...args] = input.split(/\s+/);
-    const command = this.commands.get(name.toLowerCase());
+const [name, ...args] = input.split(/\s+/);
 
-    if (!command) {
-      return;
-    }
+console.log(
+  `[Commands] Parsed command: name="${name}", args="${args.join(' ')}"`,
+);
+
+const command = this.commands.get(name.toLowerCase());
+
+if (!command) {
+  console.log(`[Commands] Unknown command: ${name}`);
+  return;
+}
+
+console.log(`[Commands] Executing: ${command.name}`);
 
     try {
       const reply = await command.handler(message, args);

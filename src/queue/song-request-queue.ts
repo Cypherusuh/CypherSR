@@ -10,6 +10,9 @@ import type {
 import { TrackResolver } from './track-resolver.js';
 
 export class SongRequestQueue {
+  removePending(id: string) {
+      throw new Error('Method not implemented.');
+  }
   private current: SongRequest | null = null;
   private readonly pending: SongRequest[] = [];
 

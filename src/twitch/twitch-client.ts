@@ -85,6 +85,7 @@ export class TwitchClient implements TwitchClientInterface {
         }
     }
 
+
     private async connectInternal(): Promise<void> {
         const token = await this.client.tokens.getValidatedToken();
 
@@ -126,16 +127,52 @@ export class TwitchClient implements TwitchClientInterface {
             },
         );
 
+        this.client.eventSub.onSession(
+            async (sessionId: string, isReconnectHandover: any) => {
+                if (isReconnectHandover) {
+                    console.log(
+                        '[Twitch] Session handover completed; retaining existing subscriptions.',
+                    );
+                    return;
+                }
+
+                if (!this.broadcasterId || !this.authenticatedUserId) {
+                    throw new Error(
+                        'Cannot subscribe to chat without authenticated and broadcaster IDs.',
+                    );
+                }
+
+                console.log(
+                    `[Twitch] Subscribing to chat on EventSub session ${sessionId}.`,
+                );
+
+                const subscription =
+                    await this.client.subscriptions.subscribeToChatMessages(
+                        this.broadcasterId,
+                        this.authenticatedUserId,
+                        sessionId,
+                    );
+
+                const status = subscription.data?.[0]?.status;
+
+                console.log(
+                    `[Twitch] Chat subscription status: ${status ?? 'missing'}.`,
+                );
+
+                if (status !== 'enabled') {
+                    throw new Error(
+                        `Twitch chat subscription was not enabled (status: ${status ?? 'missing'
+                        }).`,
+                    );
+                }
+            },
+        );
+
         await this.client.connectEventSub();
 
-        const sessionId = await this.waitForSessionId();
-
-        await this.client.subscriptions.subscribeToChatMessages(
-            this.broadcasterId,
-            this.authenticatedUserId,
-            sessionId,
-        );
+        await this.waitForSessionId();
     }
+
 
     async disconnect(): Promise<void> {
         this.removeMessageListener?.();
