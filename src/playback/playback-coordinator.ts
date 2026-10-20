@@ -12,7 +12,7 @@ import type {
   MediaTranscoder,
 } from './media-transcoder.js';
 
-interface PlayerTrack {
+export interface PlayerTrack {
   requestId: string;
   title: string;
   uploader: string | null;
