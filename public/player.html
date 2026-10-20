@@ -47,8 +47,58 @@
       let polling = false;
       let generation = 0;
 
+      // Only one synchronization loop may run at a time.
+      let synchronizing = false;
+      let pendingSynchronization = null;
+      let latestPlayback = null;
+      let synchronizationRevision = 0;
+
       function clamp(value, min, max) {
         return Math.max(min, Math.min(max, value));
+      }
+
+      function requestSynchronization(playback, expectedGeneration) {
+        latestPlayback = playback;
+
+        pendingSynchronization = {
+          playback,
+          generation: expectedGeneration,
+          revision: ++synchronizationRevision
+        };
+
+        if (!synchronizing) {
+          void runSynchronizationLoop();
+        }
+      }
+
+      async function runSynchronizationLoop() {
+        if (synchronizing) return;
+
+        synchronizing = true;
+
+        try {
+          while (pendingSynchronization !== null) {
+            const job = pendingSynchronization;
+            pendingSynchronization = null;
+
+            if (job.generation !== generation) {
+              continue;
+            }
+
+            await synchronizePlayback(
+              job.playback,
+              job.generation,
+              job.revision
+            );
+          }
+        } finally {
+          synchronizing = false;
+
+          // Handle a synchronization request received as the loop ended.
+          if (pendingSynchronization !== null) {
+            void runSynchronizationLoop();
+          }
+        }
       }
 
       async function waitForMetadata(expectedGeneration) {
@@ -57,23 +107,38 @@
         }
 
         await new Promise((resolve, reject) => {
+          let settled = false;
+
           const cleanup = () => {
             video.removeEventListener('loadedmetadata', onLoaded);
             video.removeEventListener('error', onError);
+            video.removeEventListener('emptied', onEmptied);
           };
 
-          const onLoaded = () => {
+          const finish = (callback, value) => {
+            if (settled) return;
+            settled = true;
             cleanup();
-            resolve();
+            callback(value);
           };
 
+          const onLoaded = () => finish(resolve);
           const onError = () => {
-            cleanup();
-            reject(new Error('Unable to load media metadata.'));
+            finish(reject, new Error('Unable to load media metadata.'));
+          };
+          const onEmptied = () => {
+            finish(reject, new Error('Media source was cleared.'));
           };
 
-          video.addEventListener('loadedmetadata', onLoaded, { once: true });
-          video.addEventListener('error', onError, { once: true });
+          video.addEventListener('loadedmetadata', onLoaded);
+          video.addEventListener('error', onError);
+          video.addEventListener('emptied', onEmptied);
+
+          // Metadata might have loaded between the initial check and
+          // listener registration.
+          if (video.readyState >= HTMLMediaElement.HAVE_METADATA) {
+            finish(resolve);
+          }
         });
 
         if (expectedGeneration !== generation) {
@@ -95,8 +160,7 @@
           ? playback.updatedAt
           : 0;
 
-        // Advance the last reported position by elapsed wall-clock time.
-        // This keeps the browser close to mpv between telemetry updates.
+        // Estimate mpv's current position between telemetry reports.
         const elapsed = !paused && updatedAt > 0
           ? Math.max(0, (Date.now() - updatedAt) / 1000)
           : 0;
@@ -104,31 +168,46 @@
         let target = position + elapsed;
 
         if (duration > 0) {
-          // Avoid seeking precisely to the end, which can retrigger
-          // the browser's ended state before the next track arrives.
           target = Math.min(target, Math.max(0, duration - 0.1));
         }
 
         return target;
       }
 
-      async function synchronizePlayback(playback, expectedGeneration) {
+      async function synchronizePlayback(
+        playback,
+        expectedGeneration,
+        expectedRevision
+      ) {
         if (expectedGeneration !== generation) return;
 
         try {
           await waitForMetadata(expectedGeneration);
-        } catch {
+        } catch (error) {
+          if (expectedGeneration === generation) {
+            console.debug(
+              '[StreamOps Player] Waiting for media metadata:',
+              error.message
+            );
+          }
           return;
         }
 
-        if (expectedGeneration !== generation) return;
+        // A newer poll may have arrived while metadata was loading.
+        // Never apply the older snapshot after that happens.
+        if (
+          expectedGeneration !== generation ||
+          expectedRevision !== synchronizationRevision
+        ) {
+          return;
+        }
 
         const paused = playback?.paused !== false;
         const volume = Number.isFinite(playback?.volume)
           ? clamp(playback.volume, 0, 1)
           : 1;
 
-        // Do not mute the browser player: OBS needs to capture its audio.
+        // OBS needs to capture the browser player's audio.
         video.volume = volume;
         video.muted = volume === 0;
 
@@ -147,19 +226,28 @@
 
         const drift = Math.abs(currentPosition - safeTarget);
 
-        /*
-         * Avoid constant seeking. Correct only after a meaningful drift,
-         * or when the browser is still at the start of a newly loaded track.
-         */
-        if (
+        // Do not issue repeated currentTime assignments while the browser
+        // is already seeking. The seeked event schedules another sync.
+        if (!video.seeking && (
           drift >= DRIFT_CORRECTION_SECONDS ||
-          (currentPosition < MINIMUM_SEEK_SECONDS &&
-            safeTarget >= DRIFT_CORRECTION_SECONDS)
-        ) {
+          (
+            currentPosition < MINIMUM_SEEK_SECONDS &&
+            safeTarget >= DRIFT_CORRECTION_SECONDS
+          )
+        )) {
           try {
+            console.debug(
+              `[StreamOps Player] Correcting position: ` +
+              `${currentPosition.toFixed(2)}s -> ${safeTarget.toFixed(2)}s ` +
+              `(mpv reported ${Number(playback?.position ?? 0).toFixed(2)}s)`
+            );
+
             video.currentTime = safeTarget;
-          } catch {
-            // Metadata or seekability may not be ready yet.
+          } catch (error) {
+            console.warn(
+              '[StreamOps Player] Position correction failed:',
+              error
+            );
           }
         }
 
@@ -173,18 +261,35 @@
 
         if (video.paused || video.ended) {
           try {
-            await video.play();
-          } catch {
-            /*
-             * Autoplay can be blocked by browser policy. OBS browser
-             * sources generally allow autoplay, but this is best-effort.
-             */
+            // Don't hold up the synchronization loop on the play promise.
+            // A rejected autoplay request is handled separately.
+            const playPromise = video.play();
+
+            if (playPromise && typeof playPromise.catch === 'function') {
+              void playPromise.catch(error => {
+                if (expectedGeneration === generation) {
+                  console.warn(
+                    '[StreamOps Player] Browser playback could not start:',
+                    error
+                  );
+                }
+              });
+            }
+          } catch (error) {
+            console.warn(
+              '[StreamOps Player] Browser playback could not start:',
+              error
+            );
           }
         }
       }
 
       function clearCurrentTrack() {
         generation++;
+        synchronizationRevision++;
+        pendingSynchronization = null;
+        latestPlayback = null;
+
         currentRequestId = null;
         currentMediaUrl = null;
 
@@ -202,7 +307,12 @@
             cache: 'no-store'
           });
 
-          if (!response.ok) return;
+          if (!response.ok) {
+            console.warn(
+              `[StreamOps Player] State request failed: HTTP ${response.status}`
+            );
+            return;
+          }
 
           const state = await response.json();
           const track = state.current;
@@ -226,6 +336,9 @@
 
           if (changed) {
             generation++;
+            synchronizationRevision++;
+            pendingSynchronization = null;
+
             const currentGeneration = generation;
 
             currentRequestId = track.requestId;
@@ -235,8 +348,7 @@
             video.src = track.mediaUrl;
             video.load();
 
-            // Synchronize after the browser has loaded the media metadata.
-            void synchronizePlayback(
+            requestSynchronization(
               state.playback,
               currentGeneration
             );
@@ -244,20 +356,50 @@
             return;
           }
 
-          void synchronizePlayback(state.playback, generation);
-        } catch {
-          // Recover on the next polling cycle.
+          requestSynchronization(state.playback, generation);
+        } catch (error) {
+          console.warn(
+            '[StreamOps Player] State polling failed:',
+            error
+          );
         } finally {
           polling = false;
         }
       }
 
-      video.addEventListener('error', () => {
-        console.error('[StreamOps Player] Browser media playback error.');
+      video.addEventListener('seeked', () => {
+        if (
+          latestPlayback !== null &&
+          currentRequestId !== null
+        ) {
+          requestSynchronization(latestPlayback, generation);
+        }
       });
 
-      pollState();
-      setInterval(pollState, POLL_INTERVAL_MS);
+      video.addEventListener('error', () => {
+        console.error(
+          '[StreamOps Player] Browser media playback error:',
+          {
+            code: video.error?.code,
+            message: video.error?.message,
+            source: video.currentSrc
+          }
+        );
+      });
+
+      video.addEventListener('loadedmetadata', () => {
+        if (
+          latestPlayback !== null &&
+          currentRequestId !== null
+        ) {
+          requestSynchronization(latestPlayback, generation);
+        }
+      });
+
+      void pollState();
+      setInterval(() => {
+        void pollState();
+      }, POLL_INTERVAL_MS);
     })();
   </script>
 </body>
