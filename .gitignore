@@ -3,6 +3,7 @@ node_modules/
 
 # Build output
 dist/
+dist-sea/
 coverage/
 
 # Environment variables and secrets
@@ -48,3 +49,5 @@ Thumbs.db
 /vendor/
 
 .cache/
+release/
+scripts/

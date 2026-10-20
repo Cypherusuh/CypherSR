@@ -22,6 +22,7 @@ import {
 import { MediaHandler } from './media-handler.js';
 import { PageHandler } from './page-handler.js';
 import { PlayerState } from './player-state.js';
+import { runtimePath } from '../config/runtime-paths.js';
 
 const MAX_BODY_BYTES = 8 * 1024;
 const MEDIA_ROUTE_PREFIX = '/api/media/';
@@ -51,16 +52,16 @@ export class MediaServer {
         private readonly trackResolver: TrackResolver,
         private readonly transcoder: MediaTranscoder,
     ) {
-        const resolvedMediaDir = resolve(mediaDir);
+        const resolvedMediaDir = runtimePath(mediaDir);
 
         this.mediaHandler = new MediaHandler(resolvedMediaDir);
 
         this.pageHandler = new PageHandler({
-            root: resolve('public/player-test.html'),
-            player: resolve('public/player.html'),
-            testPlayer: resolve('public/player-test.html'),
-            queue: resolve('public/queue.html'),
-            playedNow: resolve('public/played-now.html'),
+            root: runtimePath('public/player-test.html'),
+            player: runtimePath('public/player.html'),
+            testPlayer: runtimePath('public/player-test.html'),
+            queue: runtimePath('public/queue.html'),
+            playedNow: runtimePath('public/played-now.html'),
         });
 
         this.playerState = new PlayerState(

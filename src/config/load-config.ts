@@ -1,5 +1,6 @@
 
 import type { SongRequestConfig } from './types.js';
+import { runtimePath } from './runtime-paths.js';
 
 function requiredEnv(name: string): string {
   const value = process.env[name]?.trim();
@@ -44,10 +45,12 @@ export function loadConfig(): SongRequestConfig {
 
   return {
     twitch: {
-      clientId: requiredEnv('TWITCH_CLIENT_ID'),
+      clientId: "leq7ln0qrqwvdxkrr8qtqmnxz412k8",
       channel: requiredEnv('TWITCH_CHANNEL').replace(/^@/, '').toLowerCase(),
       scopes: ['user:read:chat', 'user:write:chat'],
-      tokenPath: process.env.TWITCH_TOKEN_PATH?.trim() || '.tokens/twitch.json',
+      tokenPath: runtimePath(
+        process.env.TWITCH_TOKEN_PATH?.trim() || '.tokens/twitch.json',
+      ),
     },
 
     spotify: {
@@ -70,11 +73,19 @@ export function loadConfig(): SongRequestConfig {
 
     playback: {
       radioUrl: process.env.RADIO_URL?.trim() || undefined,
-      mpvPath: process.env.MPV_PATH?.trim() || 'mpv',
-      ytDlpPath: process.env.YT_DLP_PATH?.trim() || 'yt-dlp',
-      ffmpegPath: process.env.FFMPEG_PATH?.trim() || 'ffmpeg',
-      mediaDir:
-        process.env.SONG_REQUEST_MEDIA_DIR?.trim() || '.cache/song-request/media',
+      mpvPath: runtimePath(
+        process.env.MPV_PATH?.trim() || 'vendor/mpv/mpv.exe',
+      ),
+      ytDlpPath: runtimePath(
+        process.env.YT_DLP_PATH?.trim() || 'vendor/yt-dlp.exe',
+      ),
+      ffmpegPath: runtimePath(
+        process.env.FFMPEG_PATH?.trim() || 'vendor/ffmpeg/bin/ffmpeg.exe',
+      ),
+      mediaDir: runtimePath(
+        process.env.SONG_REQUEST_MEDIA_DIR?.trim() ||
+        '.cache/song-request/media',
+      ),
       maxVideoHeight: positiveIntegerEnv('SONG_REQUEST_MAX_VIDEO_HEIGHT', 360),
     },
   };
