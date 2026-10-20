@@ -19,7 +19,9 @@ export class SongRequestQueue {
   private current: SongRequest | null = null;
   private readonly pending: SongRequest[] = [];
 
-  private readonly perUserLimit = 2;
+  private readonly perUserLimit = Number(
+    process.env.SONG_REQUEST_PER_USER_LIMIT ?? 2,
+  );
 
   constructor(
     private readonly resolver: TrackResolver,
