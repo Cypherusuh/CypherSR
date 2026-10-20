@@ -6,7 +6,7 @@ import {
     type IncomingMessage,
     type ServerResponse,
 } from 'node:http';
-import { isAbsolute, resolve } from 'node:path';
+import { resolve } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 
 import type { TrackResolver } from '../queue/track-resolver.js';
@@ -17,6 +17,7 @@ import type {
 import type { PlaybackCoordinator } from '../playback/playback-coordinator.js';
 
 const MAX_BODY_BYTES = 8 * 1024;
+const MEDIA_ROUTE_PREFIX = '/api/media/';
 
 type PlayerControlAction = 'play' | 'pause' | 'seek' | 'volume';
 
@@ -35,6 +36,37 @@ interface PlaybackRuntime {
     updatedAt: number;
 }
 
+interface ByteRange {
+    start: number;
+    end: number;
+}
+
+type JsonObject = Record<string, unknown>;
+
+function isObject(value: unknown): value is Record<string, unknown> {
+    return (
+        typeof value === 'object' &&
+        value !== null &&
+        !Array.isArray(value)
+    );
+}
+
+function errorCode(error: unknown): string | undefined {
+    if (!isObject(error) || typeof error.code !== 'string') {
+        return undefined;
+    }
+
+    return error.code;
+}
+
+function isPrematureClose(error: unknown): boolean {
+    return errorCode(error) === 'ERR_STREAM_PREMATURE_CLOSE';
+}
+
+function isFiniteNumber(value: unknown): value is number {
+    return typeof value === 'number' && Number.isFinite(value);
+}
+
 export class MediaServer {
     private readonly server;
     private readonly mediaDir: string;
@@ -42,13 +74,15 @@ export class MediaServer {
     private readonly testPlayerPath: string;
     private readonly queuePath: string;
     private readonly playedNowPath: string;
+
     private readonly media = new Map<string, PreparedMedia>();
+
     private playbackCoordinator: PlaybackCoordinator | null = null;
 
     /**
-     * This state is updated by the native Rust/mpv player.
-     * The browser player is a follower and must not write authoritative
-     * playback telemetry or advance the queue.
+     * This state represents observed playback from the native Rust/mpv player.
+     * The browser player is a follower and must not advance the queue or
+     * publish authoritative playback telemetry.
      */
     private playbackRuntime: PlaybackRuntime = {
         requestId: null,
@@ -76,15 +110,11 @@ export class MediaServer {
         this.playedNowPath = resolve('public/played-now.html');
 
         this.server = createServer((request, response) => {
-            void this.handleRequest(request, response).catch((error: unknown) => {
-                console.error('[MediaServer] Request failed:', error);
-
-                if (!response.headersSent) {
-                    this.sendError(response, 500, 'Internal server error');
-                } else {
-                    response.destroy();
-                }
-            });
+            void this.handleRequest(request, response).catch(
+                (error: unknown) => {
+                    this.handleRequestError(request, response, error);
+                },
+            );
         });
     }
 
@@ -126,7 +156,10 @@ export class MediaServer {
     register(media: PreparedMedia): void {
         const expectedPath = resolve(this.mediaDir, `${media.id}.mp4`);
 
-        if (!isAbsolute(media.path) || resolve(media.path) !== expectedPath) {
+        if (
+            !resolve(media.path) ||
+            resolve(media.path) !== expectedPath
+        ) {
             throw new Error(
                 'Media path is outside the configured media directory.',
             );
@@ -139,129 +172,108 @@ export class MediaServer {
         this.media.delete(mediaId);
     }
 
+    private handleRequestError(
+        request: IncomingMessage,
+        response: ServerResponse,
+        error: unknown,
+    ): void {
+        /*
+         * A browser can cancel a media request when its video source changes.
+         * pipeline() may reject with ERR_STREAM_PREMATURE_CLOSE in that case.
+         * Do not report a normal media disconnect as an application failure.
+         */
+        const url = new URL(request.url ?? '/', 'http://localhost');
+
+        if (
+            url.pathname.startsWith(MEDIA_ROUTE_PREFIX) &&
+            isPrematureClose(error)
+        ) {
+            return;
+        }
+
+        // The peer may have disconnected before the handler finished.
+        if (response.destroyed || response.writableEnded) {
+            if (request.aborted) {
+                return;
+            }
+        }
+
+        console.error('[MediaServer] Request failed:', error);
+
+        if (response.destroyed || response.writableEnded) {
+            return;
+        }
+
+        if (!response.headersSent) {
+            this.sendError(response, 500, 'Internal server error');
+            return;
+        }
+
+        response.destroy();
+    }
+
     private async handleRequest(
         request: IncomingMessage,
         response: ServerResponse,
     ): Promise<void> {
         const url = new URL(request.url ?? '/', 'http://localhost');
+        const pathname = url.pathname;
 
-        if (url.pathname === '/') {
+        if (pathname === '/') {
             await this.handleHtmlPage(request, response, this.testPlayerPath);
             return;
         }
 
-        if (
-            url.pathname === '/player' ||
-            url.pathname === '/player.html'
-        ) {
+        if (pathname === '/player' || pathname === '/player.html') {
             await this.handleHtmlPage(request, response, this.playerPath);
             return;
         }
 
-        if (url.pathname === '/player-test.html') {
+        if (pathname === '/player-test.html') {
             await this.handleHtmlPage(request, response, this.testPlayerPath);
             return;
         }
 
-        if (url.pathname === '/played-now.html') {
+        if (pathname === '/played-now.html') {
             await this.handleHtmlPage(request, response, this.playedNowPath);
             return;
         }
 
-        if (url.pathname === '/queue.html') {
+        if (pathname === '/queue.html') {
             await this.handleHtmlPage(request, response, this.queuePath);
             return;
         }
 
-        if (url.pathname === '/api/prepare') {
-            if (request.method !== 'POST') {
-                response.setHeader('Allow', 'POST');
-                this.sendError(response, 405, 'Method not allowed');
-                return;
-            }
-
+        if (pathname === '/api/prepare') {
+            if (!this.requireMethod(request, response, 'POST')) return;
             await this.handlePrepare(request, response);
             return;
         }
 
-        if (url.pathname === '/api/queue') {
-            if (request.method !== 'GET') {
-                response.setHeader('Allow', 'GET');
-                this.sendError(response, 405, 'Method not allowed');
-                return;
-            }
+        if (pathname === '/api/queue') {
+            if (!this.requireMethod(request, response, 'GET')) return;
 
-            if (!this.playbackCoordinator) {
-                this.sendError(response, 503, 'Playback is not initialized');
-                return;
-            }
+            const coordinator = this.getCoordinator(response);
+            if (!coordinator) return;
 
-            this.sendJson(response, 200, this.playbackCoordinator.getQueue());
+            this.sendJson(response, 200, coordinator.getQueue());
             return;
         }
 
-        if (url.pathname === '/api/player/state') {
-            if (request.method !== 'GET') {
-                response.setHeader('Allow', 'GET');
-                this.sendError(response, 405, 'Method not allowed');
-                return;
-            }
+        if (pathname === '/api/player/state') {
+            if (!this.requireMethod(request, response, 'GET')) return;
 
-            if (!this.playbackCoordinator) {
-                this.sendError(response, 503, 'Playback is not initialized');
-                return;
-            }
-
-            const playerState = this.playbackCoordinator.getPlayerState('');
-            const current = playerState.current;
-            const runtime = this.playbackRuntime;
-
-            /*
-             * Track changes can be observed here before the next mpv
-             * telemetry report arrives. Initialize a reasonable state for
-             * the new track; subsequent state updates come from Rust/mpv.
-             */
-            if (current && runtime.requestId !== current.requestId) {
-                this.playbackRuntime = {
-                    requestId: current.requestId,
-                    position: 0,
-                    duration: current.duration ?? 0,
-                    volume: runtime.volume,
-                    paused: false,
-                    updatedAt: Date.now(),
-                };
-            } else if (!current && runtime.requestId !== null) {
-                this.playbackRuntime = {
-                    requestId: null,
-                    position: 0,
-                    duration: 0,
-                    volume: runtime.volume,
-                    paused: true,
-                    updatedAt: Date.now(),
-                };
-            }
-
-            this.sendJson(response, 200, {
-                ...playerState,
-                playback: this.playbackRuntime,
-                control: this.pendingControl,
-            });
+            this.handlePlayerState(response);
             return;
         }
 
-        if (url.pathname === '/api/player/skip') {
-            if (request.method !== 'POST') {
-                response.setHeader('Allow', 'POST');
-                this.sendError(response, 405, 'Method not allowed');
-                return;
-            }
+        if (pathname === '/api/player/skip') {
+            if (!this.requireMethod(request, response, 'POST')) return;
 
-            if (!this.playbackCoordinator) {
-                this.sendError(response, 503, 'Playback is not initialized');
-                return;
-            }
+            const coordinator = this.getCoordinator(response);
+            if (!coordinator) return;
 
-            const skipped = await this.playbackCoordinator.skipTrack();
+            const skipped = await coordinator.skipTrack();
 
             this.sendJson(response, 200, {
                 skipped,
@@ -269,86 +281,103 @@ export class MediaServer {
                     ? 'Skipping the current track.'
                     : 'There is no track to skip.',
             });
-
             return;
         }
 
-        if (url.pathname === '/api/player/ended') {
-            if (request.method !== 'POST') {
-                response.setHeader('Allow', 'POST');
-                this.sendError(response, 405, 'Method not allowed');
-                return;
-            }
-
-            /*
-             * This endpoint is now intended for the Rust/mpv controller.
-             * The OBS browser player must not call it.
-             */
+        if (pathname === '/api/player/ended') {
+            if (!this.requireMethod(request, response, 'POST')) return;
             await this.handlePlayerEnded(request, response);
             return;
         }
 
-        if (url.pathname === '/api/player/telemetry') {
-            if (request.method !== 'POST') {
-                response.setHeader('Allow', 'POST');
-                this.sendError(response, 405, 'Method not allowed');
-                return;
-            }
-
-            /*
-             * Rust/mpv reports its actual playback state here.
-             * player.html deliberately does not send telemetry.
-             */
+        if (pathname === '/api/player/telemetry') {
+            if (!this.requireMethod(request, response, 'POST')) return;
             await this.handlePlayerTelemetry(request, response);
             return;
         }
 
-        if (url.pathname === '/api/player/control') {
-            if (request.method !== 'POST') {
-                response.setHeader('Allow', 'POST');
-                this.sendError(response, 405, 'Method not allowed');
-                return;
-            }
-
+        if (pathname === '/api/player/control') {
+            if (!this.requireMethod(request, response, 'POST')) return;
             await this.handlePlayerControl(request, response);
             return;
         }
 
-        if (url.pathname.startsWith('/api/media/')) {
-            await this.handleMediaRequest(request, response, url.pathname);
+        if (pathname.startsWith(MEDIA_ROUTE_PREFIX)) {
+            await this.handleMediaRequest(request, response, pathname);
             return;
         }
 
         this.sendError(response, 404, 'Not found');
     }
 
-    private async handleHtmlPage(
+    private requireMethod(
         request: IncomingMessage,
         response: ServerResponse,
-        filePath: string,
-    ): Promise<void> {
-        if (request.method !== 'GET' && request.method !== 'HEAD') {
-            response.setHeader('Allow', 'GET, HEAD');
-            this.sendError(response, 405, 'Method not allowed');
-            return;
+        method: string,
+    ): boolean {
+        if (request.method === method) {
+            return true;
         }
 
-        const html = await readFile(filePath);
+        response.setHeader('Allow', method);
+        this.sendError(response, 405, 'Method not allowed');
+        return false;
+    }
 
-        response.writeHead(200, {
-            'Content-Type': 'text/html; charset=utf-8',
-            'Content-Length': html.length,
-            'Cache-Control': 'no-store',
-            'X-Content-Type-Options': 'nosniff',
+    private getCoordinator(
+        response: ServerResponse,
+    ): PlaybackCoordinator | null {
+        if (this.playbackCoordinator) {
+            return this.playbackCoordinator;
+        }
+
+        this.sendError(response, 503, 'Playback is not initialized');
+        return null;
+    }
+
+    private handlePlayerState(response: ServerResponse): void {
+        const coordinator = this.getCoordinator(response);
+        if (!coordinator) return;
+
+        const playerState = coordinator.getPlayerState('');
+        const current = playerState.current;
+        const runtime = this.playbackRuntime;
+
+        /*
+         * Initialize state for a new track if it changes before the next
+         * telemetry report arrives from Rust/mpv.
+         */
+        if (current && runtime.requestId !== current.requestId) {
+            this.playbackRuntime = {
+                requestId: current.requestId,
+                position: 0,
+                duration: current.duration ?? 0,
+                volume: runtime.volume,
+                paused: false,
+                updatedAt: Date.now(),
+            };
+        } else if (!current && runtime.requestId !== null) {
+            this.playbackRuntime = {
+                requestId: null,
+                position: 0,
+                duration: 0,
+                volume: runtime.volume,
+                paused: true,
+                updatedAt: Date.now(),
+            };
+        }
+
+        this.sendJson(response, 200, {
+            ...playerState,
+            playback: this.playbackRuntime,
+            control: this.pendingControl,
         });
-
-        response.end(request.method === 'HEAD' ? undefined : html);
     }
 
     private async readJsonBody(
         request: IncomingMessage,
         response: ServerResponse,
-    ): Promise<Record<string, unknown> | null> {
+    ): Promise<JsonObject | null> {
         let body = '';
 
         for await (const chunk of request) {
@@ -361,33 +390,29 @@ export class MediaServer {
             }
         }
 
+        let payload: unknown;
+
         try {
-            const payload: unknown = JSON.parse(body);
-
-            if (
-                typeof payload !== 'object' ||
-                payload === null ||
-                Array.isArray(payload)
-            ) {
-                this.sendError(response, 400, 'Expected a JSON object');
-                return null;
-            }
-
-            return payload as Record<string, unknown>;
+            payload = JSON.parse(body);
         } catch {
             this.sendError(response, 400, 'Invalid JSON body');
             return null;
         }
+
+        if (!isObject(payload)) {
+            this.sendError(response, 400, 'Expected a JSON object');
+            return null;
+        }
+
+        return payload;
     }
 
     private async handlePlayerEnded(
         request: IncomingMessage,
         response: ServerResponse,
     ): Promise<void> {
-        if (!this.playbackCoordinator) {
-            this.sendError(response, 503, 'Playback is not initialized');
-            return;
-        }
+        const coordinator = this.getCoordinator(response);
+        if (!coordinator) return;
 
         const payload = await this.readJsonBody(request, response);
         if (!payload) return;
@@ -398,18 +423,15 @@ export class MediaServer {
         }
 
         const requestId = payload.requestId;
-        const current = this.playbackCoordinator.getPlayerState('').current;
+        const current = coordinator.getPlayerState('').current;
 
-        /*
-         * Reject stale end notifications. For example, mpv may finish
-         * reporting an old track after the user has already skipped it.
-         */
+        // Ignore a stale end notification from a track that has been skipped.
         if (!current || current.requestId !== requestId) {
             this.sendJson(response, 200, { accepted: false });
             return;
         }
 
-        const accepted = await this.playbackCoordinator.trackEnded(requestId);
+        const accepted = await coordinator.trackEnded(requestId);
 
         if (accepted && this.playbackRuntime.requestId === requestId) {
             this.playbackRuntime = {
@@ -429,10 +451,8 @@ export class MediaServer {
         request: IncomingMessage,
         response: ServerResponse,
     ): Promise<void> {
-        if (!this.playbackCoordinator) {
-            this.sendError(response, 503, 'Playback is not initialized');
-            return;
-        }
+        const coordinator = this.getCoordinator(response);
+        if (!coordinator) return;
 
         const payload = await this.readJsonBody(request, response);
         if (!payload) return;
@@ -441,14 +461,11 @@ export class MediaServer {
 
         if (
             typeof requestId !== 'string' ||
-            typeof position !== 'number' ||
-            !Number.isFinite(position) ||
+            !isFiniteNumber(position) ||
             position < 0 ||
-            typeof duration !== 'number' ||
-            !Number.isFinite(duration) ||
+            !isFiniteNumber(duration) ||
             duration < 0 ||
-            typeof volume !== 'number' ||
-            !Number.isFinite(volume) ||
+            !isFiniteNumber(volume) ||
             volume < 0 ||
             volume > 1 ||
             typeof paused !== 'boolean'
@@ -457,7 +474,7 @@ export class MediaServer {
             return;
         }
 
-        const current = this.playbackCoordinator.getPlayerState('').current;
+        const current = coordinator.getPlayerState('').current;
 
         if (!current || current.requestId !== requestId) {
             this.sendJson(response, 409, { accepted: false });
@@ -482,10 +499,8 @@ export class MediaServer {
         request: IncomingMessage,
         response: ServerResponse,
     ): Promise<void> {
-        if (!this.playbackCoordinator) {
-            this.sendError(response, 503, 'Playback is not initialized');
-            return;
-        }
+        const coordinator = this.getCoordinator(response);
+        if (!coordinator) return;
 
         const payload = await this.readJsonBody(request, response);
         if (!payload) return;
@@ -503,34 +518,29 @@ export class MediaServer {
             return;
         }
 
-        if (action === 'seek') {
-            if (
-                typeof value !== 'number' ||
-                !Number.isFinite(value) ||
-                value < 0
-            ) {
-                this.sendError(response, 400, 'Seek value must be non-negative');
-                return;
-            }
+        if (
+            action === 'seek' &&
+            (!isFiniteNumber(value) || value < 0)
+        ) {
+            this.sendError(response, 400, 'Seek value must be non-negative');
+            return;
         }
 
-        if (action === 'volume') {
-            if (
-                typeof value !== 'number' ||
-                !Number.isFinite(value) ||
-                value < 0 ||
-                value > 1
-            ) {
-                this.sendError(response, 400, 'Volume must be between 0 and 1');
-                return;
-            }
+        if (
+            action === 'volume' &&
+            (!isFiniteNumber(value) || value < 0 || value > 1)
+        ) {
+            this.sendError(
+                response,
+                400,
+                'Volume must be between 0 and 1',
+            );
+            return;
         }
 
         /*
-         * Do not optimistically update playbackRuntime here. It represents
-         * the observed mpv state, not the requested state. Rust consumes
-         * this revisioned command and reports the resulting state through
-         * /api/player/telemetry.
+         * This is a requested control, not observed state. Rust consumes the
+         * revision and reports the resulting mpv state through telemetry.
          */
         this.pendingControl = {
             revision: ++this.controlRevision,
@@ -574,7 +584,7 @@ export class MediaServer {
                 return;
             }
 
-            const allowedHosts = new Set([
+            const allowedYouTubeHosts = new Set([
                 'youtube.com',
                 'www.youtube.com',
                 'm.youtube.com',
@@ -582,13 +592,10 @@ export class MediaServer {
                 'youtu.be',
                 'youtube-nocookie.com',
                 'www.youtube-nocookie.com',
-                'open.spotify.com',
             ]);
 
             const hostname = parsedUrl.hostname.toLowerCase();
-
-            const isYouTubeUrl =
-                allowedHosts.has(hostname) && hostname !== 'open.spotify.com';
+            const isYouTubeUrl = allowedYouTubeHosts.has(hostname);
 
             const isSpotifyTrackUrl =
                 hostname === 'open.spotify.com' &&
@@ -626,17 +633,19 @@ export class MediaServer {
                 title: track.title,
                 uploader: track.uploader,
                 duration: media.duration,
-                mediaUrl: `${baseUrl}/api/media/${media.id}`,
+                mediaUrl: `${baseUrl}${MEDIA_ROUTE_PREFIX}${media.id}`,
             });
         } catch (error) {
             console.error('[MediaServer] Prepare failed:', error);
 
-            this.sendJson(response, 422, {
-                error:
-                    error instanceof Error
-                        ? error.message
-                        : 'Unable to prepare this track',
-            });
+            if (!response.destroyed && !response.writableEnded) {
+                this.sendJson(response, 422, {
+                    error:
+                        error instanceof Error
+                            ? error.message
+                            : 'Unable to prepare this track',
+                });
+            }
         }
     }
 
@@ -673,14 +682,14 @@ export class MediaServer {
         }
 
         const size = file.size;
-        const range = request.headers.range;
+        const rangeHeader = request.headers.range;
 
         response.setHeader('Content-Type', media.contentType);
         response.setHeader('Accept-Ranges', 'bytes');
         response.setHeader('Cache-Control', 'no-store');
         response.setHeader('X-Content-Type-Options', 'nosniff');
 
-        if (!range) {
+        if (!rangeHeader) {
             response.writeHead(200, { 'Content-Length': size });
 
             if (request.method === 'HEAD') {
@@ -688,19 +697,23 @@ export class MediaServer {
                 return;
             }
 
-            await pipeline(createReadStream(media.path), response);
+            await this.streamMediaFile(
+                media.path,
+                response,
+                request,
+            );
             return;
         }
 
-        const parsed = this.parseRange(range, size);
+        const range = this.parseRange(rangeHeader, size);
 
-        if (!parsed) {
+        if (!range) {
             response.setHeader('Content-Range', `bytes */${size}`);
             this.sendError(response, 416, 'Range not satisfiable');
             return;
         }
 
-        const { start, end } = parsed;
+        const { start, end } = range;
 
         response.writeHead(206, {
             'Content-Length': end - start + 1,
@@ -712,16 +725,53 @@ export class MediaServer {
             return;
         }
 
-        await pipeline(
-            createReadStream(media.path, { start, end }),
+        await this.streamMediaFile(
+            media.path,
             response,
+            request,
+            { start, end },
         );
+    }
+
+    private async streamMediaFile(
+        filePath: string,
+        response: ServerResponse,
+        request: IncomingMessage,
+        range?: ByteRange,
+    ): Promise<void> {
+        const fileStream = range
+            ? createReadStream(filePath, range)
+            : createReadStream(filePath);
+
+        try {
+            await pipeline(fileStream, response);
+        } catch (error) {
+            /*
+             * Browsers commonly abort the previous GET when a video source
+             * changes or playback jumps to another track. Handle that
+             * expected cancellation here, close to the media pipeline.
+             *
+             * Other errors still propagate to the global request handler.
+             */
+            if (
+                isPrematureClose(error) &&
+                (
+                    request.aborted ||
+                    response.destroyed ||
+                    !response.writable
+                )
+            ) {
+                return;
+            }
+
+            throw error;
+        }
     }
 
     private parseRange(
         header: string,
         size: number,
-    ): { start: number; end: number } | null {
+    ): ByteRange | null {
         const match = /^bytes=(\d*)-(\d*)$/.exec(header.trim());
 
         if (!match || size === 0) {
@@ -740,7 +790,10 @@ export class MediaServer {
         if (!startText) {
             const suffixLength = Number(endText);
 
-            if (!Number.isSafeInteger(suffixLength) || suffixLength <= 0) {
+            if (
+                !Number.isSafeInteger(suffixLength) ||
+                suffixLength <= 0
+            ) {
                 return null;
             }
 
@@ -766,11 +819,38 @@ export class MediaServer {
         return { start, end };
     }
 
+    private async handleHtmlPage(
+        request: IncomingMessage,
+        response: ServerResponse,
+        filePath: string,
+    ): Promise<void> {
+        if (request.method !== 'GET' && request.method !== 'HEAD') {
+            response.setHeader('Allow', 'GET, HEAD');
+            this.sendError(response, 405, 'Method not allowed');
+            return;
+        }
+
+        const html = await readFile(filePath);
+
+        response.writeHead(200, {
+            'Content-Type': 'text/html; charset=utf-8',
+            'Content-Length': html.length,
+            'Cache-Control': 'no-store',
+            'X-Content-Type-Options': 'nosniff',
+        });
+
+        response.end(request.method === 'HEAD' ? undefined : html);
+    }
+
     private sendJson(
         response: ServerResponse,
         status: number,
         value: unknown,
     ): void {
+        if (response.destroyed || response.writableEnded) {
+            return;
+        }
+
         const body = JSON.stringify(value);
 
         response.writeHead(status, {
