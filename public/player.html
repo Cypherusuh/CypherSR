@@ -1,3 +1,4 @@
+
 <!doctype html>
 <html lang="en">
 <head>
@@ -35,10 +36,9 @@
       'use strict';
 
       const STATE_URL = '/api/player/state';
-      const ENDED_URL = '/api/player/ended';
-      const TELEMETRY_URL = '/api/player/telemetry';
-      const POLL_INTERVAL_MS = 500;
-      const TELEMETRY_INTERVAL_MS = 500;
+      const POLL_INTERVAL_MS = 250;
+      const DRIFT_CORRECTION_SECONDS = 0.75;
+      const MINIMUM_SEEK_SECONDS = 0.15;
 
       const video = document.getElementById('player');
 
@@ -46,84 +46,17 @@
       let currentMediaUrl = null;
       let polling = false;
       let generation = 0;
-      let endedRequestId = null;
-      let lastControlRevision = 0;
-      let telemetryInFlight = false;
-      let telemetryQueued = false;
 
-      async function postJson(url, payload) {
-        const response = await fetch(url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-          cache: 'no-store'
-        });
-
-        if (!response.ok) {
-          throw new Error(`Request failed: ${response.status}`);
-        }
-
-        return response;
+      function clamp(value, min, max) {
+        return Math.max(min, Math.min(max, value));
       }
 
-      async function sendEnded(requestId) {
-        try {
-          await postJson(ENDED_URL, { requestId });
-        } catch {
-          // Keep the player alive if the completion notification fails.
-        }
-      }
-
-      async function sendTelemetry() {
-        if (!currentRequestId || video.readyState < HTMLMediaElement.HAVE_METADATA) {
-          return;
-        }
-
-        if (telemetryInFlight) {
-          telemetryQueued = true;
-          return;
-        }
-
-        telemetryInFlight = true;
-
-        const requestId = currentRequestId;
-        const payload = {
-          requestId,
-          position: Number.isFinite(video.currentTime)
-            ? Math.max(0, video.currentTime)
-            : 0,
-          duration: Number.isFinite(video.duration)
-            ? Math.max(0, video.duration)
-            : 0,
-          volume: video.muted
-            ? 0
-            : Math.max(0, Math.min(1, video.volume)),
-          paused: video.paused
-        };
-
-        try {
-          await postJson(TELEMETRY_URL, payload);
-        } catch {
-          // Telemetry is best-effort; the next update can recover.
-        } finally {
-          telemetryInFlight = false;
-
-          if (telemetryQueued) {
-            telemetryQueued = false;
-
-            if (requestId === currentRequestId) {
-              void sendTelemetry();
-            }
-          }
-        }
-      }
-
-      function waitForMetadata() {
+      async function waitForMetadata(expectedGeneration) {
         if (video.readyState >= HTMLMediaElement.HAVE_METADATA) {
-          return Promise.resolve();
+          return;
         }
 
-        return new Promise((resolve, reject) => {
+        await new Promise((resolve, reject) => {
           const cleanup = () => {
             video.removeEventListener('loadedmetadata', onLoaded);
             video.removeEventListener('error', onError);
@@ -142,53 +75,122 @@
           video.addEventListener('loadedmetadata', onLoaded, { once: true });
           video.addEventListener('error', onError, { once: true });
         });
+
+        if (expectedGeneration !== generation) {
+          throw new Error('Media changed while waiting for metadata.');
+        }
       }
 
-      async function applyControl(control) {
-        if (!control || !Number.isSafeInteger(control.revision)) return;
-        if (control.revision <= lastControlRevision) return;
+      function getTargetPosition(playback) {
+        const position = Number.isFinite(playback?.position)
+          ? Math.max(0, playback.position)
+          : 0;
 
-        lastControlRevision = control.revision;
+        const duration = Number.isFinite(playback?.duration)
+          ? Math.max(0, playback.duration)
+          : 0;
 
-        switch (control.action) {
-          case 'play':
-            try {
-              await video.play();
-            } catch {
-              // Playback may require a browser interaction.
-            }
-            break;
+        const paused = playback?.paused !== false;
+        const updatedAt = Number.isFinite(playback?.updatedAt)
+          ? playback.updatedAt
+          : 0;
 
-          case 'pause':
-            video.pause();
-            break;
+        // Advance the last reported position by elapsed wall-clock time.
+        // This keeps the browser close to mpv between telemetry updates.
+        const elapsed = !paused && updatedAt > 0
+          ? Math.max(0, (Date.now() - updatedAt) / 1000)
+          : 0;
 
-          case 'seek':
-            if (Number.isFinite(control.value) && control.value >= 0) {
-              try {
-                await waitForMetadata();
+        let target = position + elapsed;
 
-                if (Number.isFinite(video.duration)) {
-                  video.currentTime = Math.max(
-                    0,
-                    Math.min(control.value, video.duration)
-                  );
-                }
-              } catch {
-                // The next control can retry if media failed to load.
-              }
-            }
-            break;
-
-          case 'volume':
-            if (Number.isFinite(control.value)) {
-              video.volume = Math.max(0, Math.min(1, control.value));
-              video.muted = video.volume === 0;
-            }
-            break;
+        if (duration > 0) {
+          // Avoid seeking precisely to the end, which can retrigger
+          // the browser's ended state before the next track arrives.
+          target = Math.min(target, Math.max(0, duration - 0.1));
         }
 
-        void sendTelemetry();
+        return target;
+      }
+
+      async function synchronizePlayback(playback, expectedGeneration) {
+        if (expectedGeneration !== generation) return;
+
+        try {
+          await waitForMetadata(expectedGeneration);
+        } catch {
+          return;
+        }
+
+        if (expectedGeneration !== generation) return;
+
+        const paused = playback?.paused !== false;
+        const volume = Number.isFinite(playback?.volume)
+          ? clamp(playback.volume, 0, 1)
+          : 1;
+
+        // Do not mute the browser player: OBS needs to capture its audio.
+        video.volume = volume;
+        video.muted = volume === 0;
+
+        const targetPosition = getTargetPosition(playback);
+        const duration = Number.isFinite(video.duration) && video.duration > 0
+          ? video.duration
+          : 0;
+
+        const safeTarget = duration > 0
+          ? clamp(targetPosition, 0, Math.max(0, duration - 0.1))
+          : targetPosition;
+
+        const currentPosition = Number.isFinite(video.currentTime)
+          ? video.currentTime
+          : 0;
+
+        const drift = Math.abs(currentPosition - safeTarget);
+
+        /*
+         * Avoid constant seeking. Correct only after a meaningful drift,
+         * or when the browser is still at the start of a newly loaded track.
+         */
+        if (
+          drift >= DRIFT_CORRECTION_SECONDS ||
+          (currentPosition < MINIMUM_SEEK_SECONDS &&
+            safeTarget >= DRIFT_CORRECTION_SECONDS)
+        ) {
+          try {
+            video.currentTime = safeTarget;
+          } catch {
+            // Metadata or seekability may not be ready yet.
+          }
+        }
+
+        if (paused) {
+          if (!video.paused) {
+            video.pause();
+          }
+
+          return;
+        }
+
+        if (video.paused || video.ended) {
+          try {
+            await video.play();
+          } catch {
+            /*
+             * Autoplay can be blocked by browser policy. OBS browser
+             * sources generally allow autoplay, but this is best-effort.
+             */
+          }
+        }
+      }
+
+      function clearCurrentTrack() {
+        generation++;
+        currentRequestId = null;
+        currentMediaUrl = null;
+
+        video.pause();
+        video.removeAttribute('src');
+        video.load();
       }
 
       async function pollState() {
@@ -196,22 +198,23 @@
         polling = true;
 
         try {
-          const response = await fetch(STATE_URL, { cache: 'no-store' });
+          const response = await fetch(STATE_URL, {
+            cache: 'no-store'
+          });
+
           if (!response.ok) return;
 
           const state = await response.json();
           const track = state.current;
 
-          if (!track?.requestId || !track?.mediaUrl) {
+          if (
+            !track ||
+            typeof track.requestId !== 'string' ||
+            typeof track.mediaUrl !== 'string' ||
+            !track.mediaUrl
+          ) {
             if (currentRequestId !== null) {
-              generation++;
-              currentRequestId = null;
-              currentMediaUrl = null;
-              endedRequestId = null;
-
-              video.pause();
-              video.removeAttribute('src');
-              video.load();
+              clearCurrentTrack();
             }
 
             return;
@@ -222,74 +225,39 @@
             track.mediaUrl !== currentMediaUrl;
 
           if (changed) {
-            const currentGeneration = ++generation;
+            generation++;
+            const currentGeneration = generation;
 
             currentRequestId = track.requestId;
             currentMediaUrl = track.mediaUrl;
-            endedRequestId = null;
 
             video.pause();
             video.src = track.mediaUrl;
             video.load();
 
-            if (Number.isFinite(state.playback?.volume)) {
-              video.volume = Math.max(
-                0,
-                Math.min(1, state.playback.volume)
-              );
-              video.muted = video.volume === 0;
-            }
+            // Synchronize after the browser has loaded the media metadata.
+            void synchronizePlayback(
+              state.playback,
+              currentGeneration
+            );
 
-            const onMetadata = async () => {
-              if (currentGeneration !== generation) return;
-
-              void sendTelemetry();
-
-              // Preserve the existing autoplay behavior for each new track.
-              try {
-                await video.play();
-              } catch {
-                // Autoplay may be blocked by the browser.
-              }
-
-              void sendTelemetry();
-            };
-
-            video.addEventListener('loadedmetadata', onMetadata, { once: true });
-
-            // Handle media that was already loaded.
-            if (video.readyState >= HTMLMediaElement.HAVE_METADATA) {
-              video.removeEventListener('loadedmetadata', onMetadata);
-              void onMetadata();
-            }
+            return;
           }
 
-          await applyControl(state.control);
+          void synchronizePlayback(state.playback, generation);
         } catch {
-          // Retry on the next polling cycle.
+          // Recover on the next polling cycle.
         } finally {
           polling = false;
         }
       }
 
-      video.addEventListener('play', () => void sendTelemetry());
-      video.addEventListener('pause', () => void sendTelemetry());
-      video.addEventListener('seeked', () => void sendTelemetry());
-      video.addEventListener('loadedmetadata', () => void sendTelemetry());
-      video.addEventListener('timeupdate', () => void sendTelemetry());
-
-      video.addEventListener('ended', () => {
-        const requestId = currentRequestId;
-
-        if (!requestId || endedRequestId === requestId) return;
-
-        endedRequestId = requestId;
-        void sendEnded(requestId);
+      video.addEventListener('error', () => {
+        console.error('[StreamOps Player] Browser media playback error.');
       });
 
       pollState();
       setInterval(pollState, POLL_INTERVAL_MS);
-      setInterval(sendTelemetry, TELEMETRY_INTERVAL_MS);
     })();
   </script>
 </body>

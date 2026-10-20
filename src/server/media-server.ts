@@ -45,6 +45,11 @@ export class MediaServer {
     private readonly media = new Map<string, PreparedMedia>();
     private playbackCoordinator: PlaybackCoordinator | null = null;
 
+    /**
+     * This state is updated by the native Rust/mpv player.
+     * The browser player is a follower and must not write authoritative
+     * playback telemetry or advance the queue.
+     */
     private playbackRuntime: PlaybackRuntime = {
         requestId: null,
         position: 0,
@@ -211,21 +216,26 @@ export class MediaServer {
             const current = playerState.current;
             const runtime = this.playbackRuntime;
 
+            /*
+             * Track changes can be observed here before the next mpv
+             * telemetry report arrives. Initialize a reasonable state for
+             * the new track; subsequent state updates come from Rust/mpv.
+             */
             if (current && runtime.requestId !== current.requestId) {
                 this.playbackRuntime = {
-                    ...runtime,
                     requestId: current.requestId,
                     position: 0,
                     duration: current.duration ?? 0,
-                    paused: true,
+                    volume: runtime.volume,
+                    paused: false,
                     updatedAt: Date.now(),
                 };
             } else if (!current && runtime.requestId !== null) {
                 this.playbackRuntime = {
-                    ...runtime,
                     requestId: null,
                     position: 0,
                     duration: 0,
+                    volume: runtime.volume,
                     paused: true,
                     updatedAt: Date.now(),
                 };
@@ -270,6 +280,10 @@ export class MediaServer {
                 return;
             }
 
+            /*
+             * This endpoint is now intended for the Rust/mpv controller.
+             * The OBS browser player must not call it.
+             */
             await this.handlePlayerEnded(request, response);
             return;
         }
@@ -281,6 +295,10 @@ export class MediaServer {
                 return;
             }
 
+            /*
+             * Rust/mpv reports its actual playback state here.
+             * player.html deliberately does not send telemetry.
+             */
             await this.handlePlayerTelemetry(request, response);
             return;
         }
@@ -379,11 +397,21 @@ export class MediaServer {
             return;
         }
 
-        const accepted = await this.playbackCoordinator.trackEnded(
-            payload.requestId,
-        );
+        const requestId = payload.requestId;
+        const current = this.playbackCoordinator.getPlayerState('').current;
 
-        if (accepted && this.playbackRuntime.requestId === payload.requestId) {
+        /*
+         * Reject stale end notifications. For example, mpv may finish
+         * reporting an old track after the user has already skipped it.
+         */
+        if (!current || current.requestId !== requestId) {
+            this.sendJson(response, 200, { accepted: false });
+            return;
+        }
+
+        const accepted = await this.playbackCoordinator.trackEnded(requestId);
+
+        if (accepted && this.playbackRuntime.requestId === requestId) {
             this.playbackRuntime = {
                 ...this.playbackRuntime,
                 requestId: null,
@@ -438,7 +466,9 @@ export class MediaServer {
 
         this.playbackRuntime = {
             requestId,
-            position: Math.min(position, duration || position),
+            position: duration > 0
+                ? Math.min(position, duration)
+                : position,
             duration,
             volume,
             paused,
@@ -482,17 +512,6 @@ export class MediaServer {
                 this.sendError(response, 400, 'Seek value must be non-negative');
                 return;
             }
-
-            if (this.playbackRuntime.duration > 0) {
-                this.playbackRuntime.position = Math.min(
-                    value,
-                    this.playbackRuntime.duration,
-                );
-            } else {
-                this.playbackRuntime.position = value;
-            }
-
-            this.playbackRuntime.updatedAt = Date.now();
         }
 
         if (action === 'volume') {
@@ -505,24 +524,14 @@ export class MediaServer {
                 this.sendError(response, 400, 'Volume must be between 0 and 1');
                 return;
             }
-
-            this.playbackRuntime = {
-                ...this.playbackRuntime,
-                volume: value,
-                updatedAt: Date.now(),
-            };
         }
 
-        if (action === 'play') {
-            this.playbackRuntime.paused = false;
-            this.playbackRuntime.updatedAt = Date.now();
-        }
-
-        if (action === 'pause') {
-            this.playbackRuntime.paused = true;
-            this.playbackRuntime.updatedAt = Date.now();
-        }
-
+        /*
+         * Do not optimistically update playbackRuntime here. It represents
+         * the observed mpv state, not the requested state. Rust consumes
+         * this revisioned command and reports the resulting state through
+         * /api/player/telemetry.
+         */
         this.pendingControl = {
             revision: ++this.controlRevision,
             action,
@@ -555,7 +564,6 @@ export class MediaServer {
 
         const input = query.trim();
 
-
         if (/^https?:\/\//i.test(input)) {
             let parsedUrl: URL;
 
@@ -565,6 +573,7 @@ export class MediaServer {
                 this.sendError(response, 400, 'Invalid URL');
                 return;
             }
+
             const allowedHosts = new Set([
                 'youtube.com',
                 'www.youtube.com',
@@ -601,7 +610,6 @@ export class MediaServer {
                 return;
             }
         }
-
 
         try {
             console.log(`[MediaServer] Resolving: ${input}`);
