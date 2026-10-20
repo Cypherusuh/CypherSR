@@ -1,4 +1,6 @@
+
 import { execFile } from 'node:child_process';
+import { performance } from 'node:perf_hooks';
 import { promisify } from 'node:util';
 
 import type { ResolvedTrack } from '../queue/types.js';
@@ -30,59 +32,71 @@ export class MediaResolver {
     track: ResolvedTrack,
     mode: MediaMode,
   ): Promise<ResolvedMedia> {
-    const { stdout } = await execFileAsync(
-      this.ytDlpPath,
-      [
-        '--dump-single-json',
-        '--skip-download',
-        '--no-playlist',
-        '--no-warnings',
-        '--no-call-home',
-        '--js-runtimes',
-        'node',
-        '--remote-components',
-        'ejs:github',
-        '--format',
-        this.getFormatSelector(mode),
-        '--',
-        track.url,
-      ],
-      {
-        timeout: this.timeoutMs,
-        maxBuffer: 20 * 1024 * 1024,
-        windowsHide: true,
-      },
-    );
-
-    let result: YtDlpResult;
+    const startedAt = performance.now();
 
     try {
-      result = JSON.parse(stdout) as YtDlpResult;
-    } catch {
-      throw new Error('yt-dlp returned invalid media information.');
-    }
+      const extractionStartedAt = performance.now();
 
-    const formats = result.formats ?? [];
-
-    const selected = formats.find(
-      (format) => format.url && this.isCompatible(format, mode),
-    );
-
-    if (!selected?.url) {
-      throw new Error(
-        `yt-dlp did not return a compatible ${mode}-playback URL.`,
+      const { stdout } = await execFileAsync(
+        this.ytDlpPath,
+        [
+          '--dump-single-json',
+          '--skip-download',
+          '--no-playlist',
+          '--no-warnings',
+          '--js-runtimes',
+          'node',
+          '--remote-components',
+          'ejs:github',
+          '--format',
+          this.getFormatSelector(mode),
+          '--',
+          track.url,
+        ],
+        {
+          timeout: this.timeoutMs,
+          maxBuffer: 20 * 1024 * 1024,
+          windowsHide: true,
+        },
       );
-    }
 
-    return {
-      url: selected.url,
-      mode,
-      contentType: this.getContentType(selected.ext),
-      duration:
-        typeof result.duration === 'number'
-          ? result.duration
-          : track.duration,
-    };
+      this.logTiming(
+        'yt-dlp format extraction',
+        extractionStartedAt,
+      );
+
+      let result: YtDlpResult;
+
+      try {
+        result = JSON.parse(stdout) as YtDlpResult;
+      } catch {
+        throw new Error('yt-dlp returned invalid media information.');
+      }
+
+      const formats = result.formats ?? [];
+
+      const selected = formats.find(
+        (format) => format.url && this.isCompatible(format, mode),
+      );
+
+      if (!selected?.url) {
+        throw new Error(
+          `yt-dlp did not return a compatible ${mode}-playback URL.`,
+        );
+      }
+
+      return {
+        url: selected.url,
+        mode,
+        contentType: this.getContentType(selected.ext),
+        duration:
+          typeof result.duration === 'number'
+            ? result.duration
+            : track.duration,
+      };
+    } finally {
+      this.logTiming('Total media resolution', startedAt);
+    }
   }
 
   private getFormatSelector(mode: MediaMode): string {
@@ -133,5 +147,11 @@ export class MediaResolver {
       default:
         return null;
     }
+  }
+
+  private logTiming(label: string, startedAt: number): void {
+    const elapsedMs = Math.round(performance.now() - startedAt);
+
+    console.log(`[Timing] ${label}: ${elapsedMs} ms`);
   }
 }

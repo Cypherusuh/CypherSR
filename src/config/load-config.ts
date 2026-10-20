@@ -1,3 +1,4 @@
+
 import type { SongRequestConfig } from './types.js';
 
 function requiredEnv(name: string): string {
@@ -8,6 +9,11 @@ function requiredEnv(name: string): string {
   }
 
   return value;
+}
+
+function optionalEnv(name: string): string | undefined {
+  const value = process.env[name]?.trim();
+  return value || undefined;
 }
 
 function positiveIntegerEnv(name: string, fallback: number): number {
@@ -27,12 +33,26 @@ function positiveIntegerEnv(name: string, fallback: number): number {
 }
 
 export function loadConfig(): SongRequestConfig {
+  const spotifyClientId = optionalEnv('SPOTIFY_CLIENT_ID');
+  const spotifyClientSecret = optionalEnv('SPOTIFY_CLIENT_SECRET');
+
+  if (Boolean(spotifyClientId) !== Boolean(spotifyClientSecret)) {
+    throw new Error(
+      'Set both SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET, or leave both unset.',
+    );
+  }
+
   return {
     twitch: {
       clientId: requiredEnv('TWITCH_CLIENT_ID'),
       channel: requiredEnv('TWITCH_CHANNEL').replace(/^@/, '').toLowerCase(),
       scopes: ['user:read:chat', 'user:write:chat'],
       tokenPath: process.env.TWITCH_TOKEN_PATH?.trim() || '.tokens/twitch.json',
+    },
+
+    spotify: {
+      clientId: spotifyClientId,
+      clientSecret: spotifyClientSecret,
     },
 
     queue: {

@@ -555,6 +555,7 @@ export class MediaServer {
 
         const input = query.trim();
 
+
         if (/^https?:\/\//i.test(input)) {
             let parsedUrl: URL;
 
@@ -564,7 +565,6 @@ export class MediaServer {
                 this.sendError(response, 400, 'Invalid URL');
                 return;
             }
-
             const allowedHosts = new Set([
                 'youtube.com',
                 'www.youtube.com',
@@ -573,22 +573,35 @@ export class MediaServer {
                 'youtu.be',
                 'youtube-nocookie.com',
                 'www.youtube-nocookie.com',
+                'open.spotify.com',
             ]);
+
+            const hostname = parsedUrl.hostname.toLowerCase();
+
+            const isYouTubeUrl =
+                allowedHosts.has(hostname) && hostname !== 'open.spotify.com';
+
+            const isSpotifyTrackUrl =
+                hostname === 'open.spotify.com' &&
+                /^\/(?:intl-[a-z]{2}\/)?track\/[A-Za-z0-9]{22}\/?$/.test(
+                    parsedUrl.pathname,
+                );
 
             if (
                 parsedUrl.protocol !== 'https:' ||
-                !allowedHosts.has(parsedUrl.hostname.toLowerCase()) ||
                 parsedUrl.username ||
-                parsedUrl.password
+                parsedUrl.password ||
+                (!isYouTubeUrl && !isSpotifyTrackUrl)
             ) {
                 this.sendError(
                     response,
                     400,
-                    'Only YouTube URLs are supported',
+                    'Only YouTube URLs and Spotify track URLs are supported',
                 );
                 return;
             }
         }
+
 
         try {
             console.log(`[MediaServer] Resolving: ${input}`);

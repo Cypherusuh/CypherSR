@@ -9,6 +9,7 @@ import { SongRequestQueue } from './queue/song-request-queue.js';
 import { TrackResolver } from './queue/track-resolver.js';
 import { MediaServer } from './server/media-server.js';
 import { TwitchClient } from './twitch/twitch-client.js';
+import { SpotifyTrackResolver } from './queue/spotify-track-resolver.js';
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -28,7 +29,13 @@ async function main(): Promise<void> {
     await twitch.login();
   }
 
-  const trackResolver = new TrackResolver(config.playback.ytDlpPath);
+  const spotifyResolver = new SpotifyTrackResolver();
+
+  const trackResolver = new TrackResolver(
+    config.playback.ytDlpPath,
+    30_000,
+    spotifyResolver,
+  );
 
   const queue = new SongRequestQueue(
     trackResolver,

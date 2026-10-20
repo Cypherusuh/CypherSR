@@ -3,7 +3,7 @@ import { rm } from 'node:fs/promises';
 
 import type { ChatMessage } from '../commands/types.js';
 import type { SongRequestQueue } from '../queue/song-request-queue.js';
-import type { QueueSnapshot } from '../queue/types.js';
+import type { QueueSnapshot, SongRequest } from '../queue/types.js';
 import type {
   PreparedMedia,
   MediaTranscoder,
@@ -40,11 +40,14 @@ export class PlaybackCoordinator {
     message: ChatMessage,
     query: string,
   ): Promise<string> {
-    const request = await this.queue.addRequest(message, query);
+    // Reserve capacity synchronously so concurrent requests cannot
+    // bypass the queue limit.
+    const request = this.queue.reserveRequest(message, query);
 
-    this.schedulePump();
+    // Start resolving the track without blocking the chat reply.
+    void this.resolveRequest(request);
 
-    return `Added "${request.track?.title ?? request.query}" to the song queue.`;
+    return `Added "${request.query}" to the song queue.`;
   }
 
   getQueue(): QueueSnapshot {
@@ -82,6 +85,26 @@ export class PlaybackCoordinator {
     }
 
     return this.finishTrack(current.id);
+  }
+
+  private async resolveRequest(request: SongRequest): Promise<void> {
+    try {
+      const resolved = await this.queue.resolveRequest(request.id);
+
+      console.log(
+        `[Playback] Resolved: ${resolved.track?.title ?? resolved.query}`,
+      );
+
+      this.schedulePump();
+    } catch (error) {
+      console.error(
+        `[Playback] Failed to resolve "${request.query}":`,
+        error,
+      );
+
+      // A failed resolution removes the request from the queue.
+      this.schedulePump();
+    }
   }
 
   private async finishTrack(requestId: string): Promise<boolean> {
@@ -137,7 +160,7 @@ export class PlaybackCoordinator {
     const snapshot = this.queue.getSnapshot();
     const next = snapshot.pending[0];
 
-    // Preserve FIFO order. Never skip over a request still resolving.
+    // Preserve FIFO order. Never skip a request still resolving.
     if (!next || next.status !== 'ready' || !next.track) {
       return;
     }
@@ -169,7 +192,6 @@ export class PlaybackCoordinator {
       }
     }
 
-    // Only promote a prepared request to the current track.
     if (!this.queue.getCurrent()) {
       const selected = this.queue.takeNextReady();
 
@@ -180,11 +202,12 @@ export class PlaybackCoordinator {
           this.prepared.delete(selected.id);
           this.currentMedia = selectedMedia;
 
-          console.log(`[Playback] Now ready to play: ${selected.track?.title}`);
+          console.log(
+            `[Playback] Now ready to play: ${selected.track?.title}`,
+          );
         }
       }
 
-      // With a current track established, prepare one track ahead.
       this.rerun = true;
     }
   }

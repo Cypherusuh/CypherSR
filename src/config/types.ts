@@ -7,6 +7,11 @@ export interface SongRequestConfig {
     tokenPath: string;
   };
 
+  spotify: {
+    clientId?: string;
+    clientSecret?: string;
+  };
+
   queue: {
     limit: number;
   };
