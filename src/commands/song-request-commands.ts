@@ -1,11 +1,13 @@
-
 import type {
   ChatMessage,
   CommandDefinition,
   ChatReply,
 } from './types.js';
 
-import type { QueueSnapshot } from '../queue/types.js';
+import type {
+  QueueSnapshot,
+  SongRequest,
+} from '../queue/types.js';
 
 export interface SongRequestCommandActions {
   isRequestModeEnabled(): boolean;
@@ -18,6 +20,8 @@ export interface SongRequestCommandActions {
   ): Promise<string>;
 
   getQueue(): QueueSnapshot;
+
+  removeLatestRequest(userId: string): SongRequest | null;
 
   skipTrack(): Promise<boolean>;
 }
@@ -69,7 +73,27 @@ export function createSongRequestCommands(
           return reply('Usage: !sr <URL or search query>');
         }
 
-return reply(await actions.requestSong(message, query));
+        return reply(await actions.requestSong(message, query));
+      },
+    },
+    {
+      name: 'wrongsong',
+      description: 'Remove your most recent pending song request.',
+      handler: async (message) => {
+        const removed = actions.removeLatestRequest(message.userId);
+
+        if (!removed) {
+          return reply(
+            'You do not have any pending song requests to remove.',
+          );
+        }
+
+        const title = formatTrack(
+          removed.track?.title,
+          removed.query,
+        );
+
+        return reply(`Removed your song request: ${title}.`);
       },
     },
     {

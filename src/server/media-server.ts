@@ -4,7 +4,6 @@ import {
     type IncomingMessage,
     type ServerResponse,
 } from 'node:http';
-import { resolve } from 'node:path';
 
 import type { TrackResolver } from '../queue/track-resolver.js';
 import type {

@@ -137,6 +137,19 @@ export class SongRequestQueue {
     return true;
   }
 
+  removeLatestPendingByUser(userId: string): SongRequest | null {
+    for (let index = this.pending.length - 1; index >= 0; index--) {
+      const request = this.pending[index];
+
+      if (request?.requester.id === userId) {
+        this.pending.splice(index, 1);
+        return request;
+      }
+    }
+
+    return null;
+  }
+
   getSnapshot(): QueueSnapshot {
     return {
       current: this.current,

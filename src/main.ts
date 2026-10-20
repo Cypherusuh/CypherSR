@@ -2,7 +2,7 @@
 import { FileTokenStore } from './auth/file-token-store.js';
 import { CommandRouter } from './commands/command-router.js';
 import { createSongRequestCommands } from './commands/song-request-commands.js';
-import { loadConfig } from './config/load-config.js';
+import { loadConfig, saveConfig } from './config/load-config.js';
 import { PlaybackCoordinator } from './playback/playback-coordinator.js';
 import { MediaTranscoder } from './playback/media-transcoder.js';
 import { SongRequestQueue } from './queue/song-request-queue.js';
@@ -28,6 +28,17 @@ async function main(): Promise<void> {
     console.log('[Twitch] No saved credentials found. Starting login...');
     await twitch.login();
   }
+
+  const resolveAndSaveChannel = async (): Promise<void> => {
+    const channel = await twitch.getAuthenticatedLogin();
+
+    config.twitch.channel = channel;
+    twitch.setChannel(channel);
+    saveConfig(config);
+
+    console.log(`[Twitch] Authenticated account: ${channel}`);
+    console.log('[Config] Twitch channel saved to data/config.json.');
+  };
 
   const spotifyResolver = new SpotifyTrackResolver();
 
@@ -78,44 +89,68 @@ async function main(): Promise<void> {
         return requestModeEnabled;
       },
 
-      requestSong: (message, query) =>
-        playback.requestSong(message, query),
+      requestSong: (message, query) => playback.requestSong(message, query),
 
       getQueue: () => playback.getQueue(),
 
       skipTrack: () => playback.skipTrack(),
+      removeLatestRequest: (userId) =>
+        queue.removeLatestPendingByUser(userId),
     }),
     (message) => twitch.sendMessage(message),
   );
 
-  await mediaServer.start();
+  let mediaServerStarted = false;
+
+  const startMediaServer = async (): Promise<void> => {
+    if (mediaServerStarted) {
+      return;
+    }
+
+    await mediaServer.start();
+    mediaServerStarted = true;
+  };
+
+  const stopMediaServer = async (): Promise<void> => {
+    if (!mediaServerStarted) {
+      return;
+    }
+
+    await mediaServer.stop();
+    mediaServerStarted = false;
+  };
+
+  const isAuthenticationFailure = (error: unknown): boolean => {
+    const message = error instanceof Error ? error.message : String(error);
+
+    return /token refresh failed|token validation failed|invalid refresh token|refresh token.*invalid/i.test(
+      message,
+    );
+  };
 
   try {
+    await resolveAndSaveChannel();
+    await startMediaServer();
     await twitch.connect();
   } catch (error) {
-    const message =
-      error instanceof Error ? error.message : String(error);
-
-    const isRefreshFailure =
-      /token refresh failed|invalid refresh token|refresh token.*invalid/i.test(
-        message,
-      );
-
-    if (!isRefreshFailure) {
-      await mediaServer.stop();
+    if (!isAuthenticationFailure(error)) {
+      await stopMediaServer();
       throw error;
     }
 
     console.warn(
-      '[Twitch] Saved credentials could not be refreshed. Starting login again.',
+      '[Twitch] Saved credentials are no longer valid. Starting login again.',
     );
 
     try {
       await tokenStore.clear();
       await twitch.login();
+
+      await resolveAndSaveChannel();
+      await startMediaServer();
       await twitch.connect();
     } catch (loginError) {
-      await mediaServer.stop();
+      await stopMediaServer();
       throw loginError;
     }
   }
@@ -136,7 +171,7 @@ async function main(): Promise<void> {
 
   let shuttingDown = false;
 
-  const shutdown = async () => {
+  const shutdown = async (): Promise<void> => {
     if (shuttingDown) {
       return;
     }
@@ -146,7 +181,7 @@ async function main(): Promise<void> {
 
     const results = await Promise.allSettled([
       twitch.disconnect(),
-      mediaServer.stop(),
+      stopMediaServer(),
     ]);
 
     for (const result of results) {

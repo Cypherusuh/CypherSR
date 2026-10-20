@@ -30,8 +30,8 @@ export interface TwitchAdapterOptions {
 
 export class TwitchClient implements TwitchClientInterface {
     private readonly client: TwitchConnectorClient;
-    private readonly channel: string;
 
+    private channel: string;
     private broadcasterId: string | null = null;
     private authenticatedUserId: string | null = null;
     private removeMessageListener: (() => void) | null = null;
@@ -47,6 +47,27 @@ export class TwitchClient implements TwitchClientInterface {
         });
     }
 
+    async getAuthenticatedLogin(): Promise<string> {
+        const token = await this.client.tokens.getValidatedToken();
+
+        if (typeof token.login !== 'string' || !token.login.trim()) {
+            throw new Error(
+                'Twitch did not return a login name for the authenticated account.',
+            );
+        }
+
+        return token.login.trim().replace(/^@/, '').toLowerCase();
+    }
+
+    setChannel(channel: string): void {
+        const normalized = channel.trim().replace(/^@/, '').toLowerCase();
+
+        if (!normalized) {
+            throw new Error('Twitch channel cannot be empty.');
+        }
+
+        this.channel = normalized;
+    }
     async login(): Promise<void> {
         const login = await this.client.tokens.startLogin();
 
