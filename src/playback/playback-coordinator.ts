@@ -40,14 +40,28 @@ export class PlaybackCoordinator {
     message: ChatMessage,
     query: string,
   ): Promise<string> {
-    // Reserve capacity synchronously so concurrent requests cannot
-    // bypass the queue limit.
+    // Reserve the queue slot immediately.
     const request = this.queue.reserveRequest(message, query);
 
-    // Start resolving the track without blocking the chat reply.
-    void this.resolveRequest(request);
+    // Resolve the actual track title, but do not wait for media download.
+    try {
+      const resolved = await this.queue.resolveRequest(request.id);
 
-    return `Added "${request.query}" to the song queue.`;
+      this.schedulePump();
+
+      const title = resolved.track?.title ?? resolved.query;
+
+      return `Added "${title}" to the song queue.`;
+    } catch (error) {
+      console.error(
+        `[Playback] Failed to resolve "${request.query}":`,
+        error,
+      );
+
+      // Keep the existing behavior of reporting the failure through
+      // the command router's error handler.
+      throw error;
+    }
   }
 
   getQueue(): QueueSnapshot {
@@ -85,26 +99,6 @@ export class PlaybackCoordinator {
     }
 
     return this.finishTrack(current.id);
-  }
-
-  private async resolveRequest(request: SongRequest): Promise<void> {
-    try {
-      const resolved = await this.queue.resolveRequest(request.id);
-
-      console.log(
-        `[Playback] Resolved: ${resolved.track?.title ?? resolved.query}`,
-      );
-
-      this.schedulePump();
-    } catch (error) {
-      console.error(
-        `[Playback] Failed to resolve "${request.query}":`,
-        error,
-      );
-
-      // A failed resolution removes the request from the queue.
-      this.schedulePump();
-    }
   }
 
   private async finishTrack(requestId: string): Promise<boolean> {
@@ -192,6 +186,7 @@ export class PlaybackCoordinator {
       }
     }
 
+    // Only promote a prepared request to the current track.
     if (!this.queue.getCurrent()) {
       const selected = this.queue.takeNextReady();
 
@@ -208,6 +203,7 @@ export class PlaybackCoordinator {
         }
       }
 
+      // With a current track established, prepare one track ahead.
       this.rerun = true;
     }
   }
