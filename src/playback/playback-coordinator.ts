@@ -2,7 +2,10 @@
 import { rm } from 'node:fs/promises';
 
 import type { ChatMessage } from '../commands/types.js';
-import type { SongRequestQueue } from '../queue/song-request-queue.js';
+import {
+  SongRequestLimitError,
+  type SongRequestQueue,
+} from '../queue/song-request-queue.js';
 import type { QueueSnapshot, SongRequest } from '../queue/types.js';
 import type {
   PreparedMedia,
@@ -34,16 +37,24 @@ export class PlaybackCoordinator {
     private readonly transcoder: MediaTranscoder,
     private readonly registerMedia: (media: PreparedMedia) => void,
     private readonly unregisterMedia: (mediaId: string) => void,
-  ) {}
+  ) { }
 
   async requestSong(
     message: ChatMessage,
     query: string,
   ): Promise<string> {
-    // Reserve the queue slot immediately.
-    const request = this.queue.reserveRequest(message, query);
+    let request: SongRequest;
 
-    // Resolve the actual track title, but do not wait for media download.
+    try {
+      request = this.queue.reserveRequest(message, query);
+    } catch (error) {
+      if (error instanceof SongRequestLimitError) {
+        return error.message;
+      }
+
+      throw error;
+    }
+
     try {
       const resolved = await this.queue.resolveRequest(request.id);
 
@@ -58,8 +69,7 @@ export class PlaybackCoordinator {
         error,
       );
 
-      // Keep the existing behavior of reporting the failure through
-      // the command router's error handler.
+      this.schedulePump();
       throw error;
     }
   }

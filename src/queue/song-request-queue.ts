@@ -4,14 +4,22 @@ import { randomUUID } from 'node:crypto';
 import type { ChatMessage } from '../commands/types.js';
 import type {
   QueueSnapshot,
-  ResolvedTrack,
   SongRequest,
 } from './types.js';
 import { TrackResolver } from './track-resolver.js';
 
+export class SongRequestLimitError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'SongRequestLimitError';
+  }
+}
+
 export class SongRequestQueue {
   private current: SongRequest | null = null;
   private readonly pending: SongRequest[] = [];
+
+  private readonly perUserLimit = 2;
 
   constructor(
     private readonly resolver: TrackResolver,
@@ -29,8 +37,20 @@ export class SongRequestQueue {
       throw new Error('Provide a URL or search query.');
     }
 
+    const userPendingCount = this.pending.filter(
+      (request) => request.requester.id === message.userId,
+    ).length;
+
+    if (userPendingCount >= this.perUserLimit) {
+      throw new SongRequestLimitError(
+        `You can only have ${this.perUserLimit} pending song requests at a time.`,
+      );
+    }
+
     if (this.pending.length >= this.limit) {
-      throw new Error('The song request queue is full.');
+      throw new SongRequestLimitError(
+        'The song request queue is full. Please try again later.',
+      );
     }
 
     const request: SongRequest = {
@@ -45,6 +65,7 @@ export class SongRequestQueue {
       status: 'resolving',
     };
 
+    // Reserve capacity before asynchronous track resolution.
     this.pending.push(request);
 
     return request;
@@ -66,7 +87,6 @@ export class SongRequestQueue {
     try {
       const track = await this.resolver.resolve(request.query);
 
-      // The request may have been removed while resolution was running.
       if (!this.pending.some((item) => item.id === requestId)) {
         throw new Error('Song request was removed during resolution.');
       }
