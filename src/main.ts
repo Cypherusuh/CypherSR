@@ -246,13 +246,26 @@ async function main(): Promise<void> {
     `[SongRequest] Connected to Twitch channel: ${config.twitch.channel}`,
   );
   console.log('[SongRequest] Listening for chat messages.');
+  console.log('');
+  console.log('=== Song Request Commands ===');
+  console.log('  !sr <URL/title>  Request a song by URL or title.');
+  console.log('  !radio           Toggle radio and song requests on/off.');
+  console.log('  !queue           Show the current track and pending requests.');
+  console.log('  !skip            Skip the current track (mods/broadcaster).');
+  console.log('  !default         Show the current default song.');
+  console.log('  !default <URL>   Set the default song (broadcaster).');
+  console.log('  !default clear   Clear the default song (broadcaster).');
+  console.log('  !wrongsong       Remove your latest pending request.');
+  console.log('');
+  console.log('=== OBS Browser Sources ===');
+
   const baseUrl = `http://${config.server.host}:${config.server.port}`;
 
-  console.log('[OBS] Browser Source URLs:');
   console.log(`  Player:     ${baseUrl}/player.html`);
   console.log(`  Played Now: ${baseUrl}/played-now.html`);
   console.log(`  Queue:      ${baseUrl}/queue.html`);
   console.log(`  Test:       ${baseUrl}/browser-player.html`);
+  console.log('');
 
   let shutdownPromise: Promise<void> | undefined;
 
