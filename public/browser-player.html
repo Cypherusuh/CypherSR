@@ -198,7 +198,7 @@
 
 <body>
   <main class="stage">
-    <video id="player" playsinline preload="auto"></video>
+    <video id="player" autoplay playsinline preload="auto"></video>
     <div id="stageMessage" class="stage-message">
       Waiting for a song request
     </div>
@@ -391,7 +391,9 @@
           await video.play();
           setStatus('Playing');
         } catch {
-          setStatus('Playback blocked. Press Play to start.', true);
+          // Autoplay is attempted automatically. Browser policy may still
+          // require one user gesture, especially when audio is enabled.
+          setStatus('Autoplay blocked by browser settings', true);
         }
 
         updateButtons();
@@ -505,6 +507,13 @@
 
             video.addEventListener('loadedmetadata', onMetadata);
             video.addEventListener('error', onError, { once: true });
+
+            // Try again once media is actually ready to play. Some sources
+            // expose metadata before enough data has buffered for playback.
+            video.addEventListener('canplay', async () => {
+              if (generation !== mediaGeneration || !currentRequestId) return;
+              if (video.paused) await playCurrentTrack();
+            }, { once: true });
 
             if (video.readyState >= HTMLMediaElement.HAVE_METADATA) {
               await onMetadata();

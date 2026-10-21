@@ -123,7 +123,7 @@ async function main(): Promise<void> {
 
   mediaServer.attachPlaybackCoordinator(playback);
 
-  let requestModeEnabled = false;
+  let requestModeEnabled = true;
 
   const commandRouter = new CommandRouter(
     config.commands.prefix,
@@ -231,6 +231,16 @@ async function main(): Promise<void> {
 
     void commandRouter.handleMessage(message);
   });
+
+  try {
+    await twitch.sendMessage('Radio and song requests enabled');
+    console.log('[SongRequest] Announced "sr on" in Twitch chat.');
+  } catch (error) {
+    console.error(
+      '[SongRequest] Failed to announce startup status in Twitch chat:',
+      error,
+    );
+  }
 
   console.log(
     `[SongRequest] Connected to Twitch channel: ${config.twitch.channel}`,
