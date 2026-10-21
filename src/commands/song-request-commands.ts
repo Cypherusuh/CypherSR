@@ -1,3 +1,4 @@
+
 import type {
   ChatMessage,
   CommandDefinition,
@@ -7,33 +8,29 @@ import type {
 import type {
   QueueSnapshot,
   SongRequest,
+  ResolvedTrack,
 } from '../queue/types.js';
 
 export interface SongRequestCommandActions {
   isRequestModeEnabled(): boolean;
-
   toggleRequestMode(): Promise<boolean>;
-
-  requestSong(
-    message: ChatMessage,
-    query: string,
-  ): Promise<string>;
-
+  requestSong(message: ChatMessage, query: string): Promise<string>;
   getQueue(): QueueSnapshot;
-
   removeLatestRequest(userId: string): SongRequest | null;
-
   skipTrack(): Promise<boolean>;
+  getDefaultSong(): {
+    query: string;
+    track: ResolvedTrack;
+  } | null;
+  setDefaultSong(query: string): Promise<string>;
+  clearDefaultSong(): Promise<string>;
 }
 
 function reply(message: string): ChatReply {
   return { message };
 }
 
-function formatTrack(
-  title: string | undefined,
-  fallback: string,
-): string {
+function formatTrack(title: string | undefined, fallback: string): string {
   return title?.trim() || fallback;
 }
 
@@ -44,7 +41,7 @@ export function createSongRequestCommands(
     {
       name: 'radio',
       description: 'Toggle radio and song-request mode.',
-      handler: async (message) => {
+      handler: async message => {
         if (!message.isBroadcaster) {
           return reply('Only the broadcaster can use !radio.');
         }
@@ -77,21 +74,56 @@ export function createSongRequestCommands(
       },
     },
     {
-      name: 'wrongsong',
-      description: 'Remove your most recent pending song request.',
-      handler: async (message) => {
-        const removed = actions.removeLatestRequest(message.userId);
+      name: 'default',
+      description: 'Set, show, or clear the default song.',
+      handler: async (message, args) => {
+        const argument = args.join(' ').trim();
 
-        if (!removed) {
+        if (!argument) {
+          const current = actions.getDefaultSong();
+
+          if (!current) {
+            return reply('No default song is configured.');
+          }
+
           return reply(
-            'You do not have any pending song requests to remove.',
+            `Default song: ${formatTrack(current.track.title, current.query)}.`,
           );
         }
 
-        const title = formatTrack(
-          removed.track?.title,
-          removed.query,
-        );
+        if (!message.isBroadcaster) {
+          return reply('Only the broadcaster can change the default song.');
+        }
+
+        if (argument.toLowerCase() === 'clear') {
+          try {
+            return reply(await actions.clearDefaultSong());
+          } catch (error) {
+            console.error('[Commands] Failed to clear default song:', error);
+            return reply('Failed to clear the default song. Check the application logs.');
+          }
+        }
+
+        try {
+          return reply(await actions.setDefaultSong(argument));
+        } catch (error) {
+          console.error('[Commands] Failed to set default song:', error);
+          const detail = error instanceof Error ? error.message : String(error);
+          return reply(`Failed to set default song: ${detail}`);
+        }
+      },
+    },
+    {
+      name: 'wrongsong',
+      description: 'Remove your most recent pending song request.',
+      handler: async message => {
+        const removed = actions.removeLatestRequest(message.userId);
+
+        if (!removed) {
+          return reply('You do not have any pending song requests to remove.');
+        }
+
+        const title = formatTrack(removed.track?.title, removed.query);
 
         return reply(`Removed your song request: ${title}.`);
       },
@@ -110,24 +142,18 @@ export function createSongRequestCommands(
         const lines: string[] = [];
 
         if (queue.current) {
-          const current = queue.current;
-
           lines.push(
-            `Now playing: ${formatTrack(current.track?.title, current.query)}`,
+            `Now playing: ${formatTrack(queue.current.track?.title, queue.current.query)}`,
           );
         }
 
         if (queue.pending.length > 0) {
           const pending = queue.pending
             .slice(0, 5)
-            .map((request, index) => {
-              const title = formatTrack(
-                request.track?.title,
-                request.query,
-              );
-
-              return `${index + 1}. ${title} (${request.requester.displayName})`;
-            });
+            .map(
+              (request, index) =>
+                `${index + 1}. ${formatTrack(request.track?.title, request.query)} (${request.requester.displayName})`,
+            );
 
           lines.push(`Up next: ${pending.join(' | ')}`);
         }
@@ -138,9 +164,7 @@ export function createSongRequestCommands(
           lines.push(`And ${remaining} more.`);
         }
 
-        lines.push(
-          `Queue: ${queue.pending.length}/${queue.limit} pending.`,
-        );
+        lines.push(`Queue: ${queue.pending.length}/${queue.limit} pending.`);
 
         return reply(lines.join(' '));
       },
@@ -148,7 +172,7 @@ export function createSongRequestCommands(
     {
       name: 'skip',
       description: 'Skip the currently playing track.',
-      handler: async (message) => {
+      handler: async message => {
         if (!message.isModerator && !message.isBroadcaster) {
           return reply('Only moderators and the broadcaster can use !skip.');
         }

@@ -69,7 +69,7 @@ export class PageHandler {
             case '/player.html':
                 return this.pages.player;
 
-            case '/player-test.html':
+            case '/browser-player.html':
                 return this.pages.testPlayer;
 
             case '/played-now.html':

@@ -11,6 +11,9 @@ import { MediaServer } from './server/media-server.js';
 import { TwitchClient } from './twitch/twitch-client.js';
 import { SpotifyTrackResolver } from './queue/spotify-track-resolver.js';
 import { spawn } from 'node:child_process';
+import { DefaultSongManager } from './playback/default-song-manager.js';
+import { dataPath } from './config/runtime-paths.js'
+import { ResolvedTrack } from './queue/types.js';
 
 async function copyToClipboard(text: string): Promise<void> {
   if (process.platform !== 'win32') {
@@ -72,6 +75,23 @@ async function main(): Promise<void> {
     spotifyResolver,
   );
 
+  const defaultMediaDir = dataPath('default-song');
+
+  const defaultTranscoder = new MediaTranscoder({
+    ytDlpPath: config.playback.ytDlpPath,
+    ffmpegPath: config.playback.ffmpegPath,
+    mediaDir: defaultMediaDir,
+    maxVideoHeight: config.playback.maxVideoHeight,
+  });
+
+  const defaultSongManager = new DefaultSongManager(
+    trackResolver,
+    defaultTranscoder,
+    defaultMediaDir,
+  );
+
+  await defaultSongManager.load();
+
   const queue = new SongRequestQueue(
     trackResolver,
     config.queue.limit,
@@ -90,13 +110,15 @@ async function main(): Promise<void> {
     config.playback.mediaDir,
     trackResolver,
     transcoder,
+    defaultSongManager,
   );
 
   const playback = new PlaybackCoordinator(
     queue,
     transcoder,
-    (media) => mediaServer.register(media),
-    (mediaId) => mediaServer.unregister(mediaId),
+    defaultSongManager,
+    media => mediaServer.register(media),
+    mediaId => mediaServer.unregister(mediaId),
   );
 
   mediaServer.attachPlaybackCoordinator(playback);
@@ -118,8 +140,31 @@ async function main(): Promise<void> {
       getQueue: () => playback.getQueue(),
 
       skipTrack: () => playback.skipTrack(),
-      removeLatestRequest: (userId) =>
-        queue.removeLatestPendingByUser(userId),
+      removeLatestRequest: (userId) => queue.removeLatestPendingByUser(userId),
+      getDefaultSong: () => {
+        const song = defaultSongManager.getDefault();
+
+        return song
+          ? {
+            query: song.query,
+            track: song.track,
+          }
+          : null;
+      },
+
+      setDefaultSong: async query => {
+        const song = await defaultSongManager.setDefault(query);
+
+        return `Default song set to "${song.track.title}".`;
+      },
+
+      clearDefaultSong: async () => {
+        const cleared = await defaultSongManager.clearDefault();
+
+        return cleared
+          ? 'Default song cleared.'
+          : 'No default song is configured.';
+      },
     }),
     (message) => twitch.sendMessage(message),
   );
@@ -197,7 +242,7 @@ async function main(): Promise<void> {
   console.log(`  Player:     ${baseUrl}/player.html`);
   console.log(`  Played Now: ${baseUrl}/played-now.html`);
   console.log(`  Queue:      ${baseUrl}/queue.html`);
-  console.log(`  Test:       ${baseUrl}/player-test.html`);
+  console.log(`  Test:       ${baseUrl}/browser-player.html`);
 
   let shutdownPromise: Promise<void> | undefined;
 

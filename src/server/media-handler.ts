@@ -11,6 +11,7 @@ export class MediaHandler {
 
     constructor(
         private readonly mediaDir: string,
+        private readonly routePrefix = '/api/media/',
     ) { }
 
     register(media: PreparedMedia): void {
@@ -46,8 +47,15 @@ export class MediaHandler {
             );
             return;
         }
-        
-        const match = /^\/api\/media\/([a-f0-9-]{36})$/.exec(pathname);
+
+        const escapedPrefix = this.routePrefix.replace(
+            /[.*+?^${}()|[\]\\]/g,
+            '\\$&',
+        );
+
+        const match = new RegExp(
+            `^${escapedPrefix}([a-f0-9-]{36})$`,
+        ).exec(pathname);
 
         if (!match) {
             this.sendError(response, 404, 'Not found');
@@ -181,7 +189,7 @@ export class MediaHandler {
         header: string,
         size: number,
     ): ByteRange | null {
-       
+
         const match = /^bytes=(\d*)-(\d*)$/.exec(header.trim());
 
         if (!match || size === 0) {

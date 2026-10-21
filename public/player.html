@@ -1,6 +1,6 @@
-
 <!doctype html>
 <html lang="en">
+
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -28,6 +28,7 @@
     }
   </style>
 </head>
+
 <body>
   <video id="player" playsinline preload="auto"></video>
 
@@ -44,6 +45,7 @@
 
       let currentRequestId = null;
       let currentMediaUrl = null;
+      let currentSource = 'request';
       let polling = false;
       let generation = 0;
 
@@ -101,8 +103,8 @@
         }
       }
 
-      async function waitForMetadata(expectedGeneration) {
-        if (video.readyState >= HTMLMediaElement.HAVE_METADATA) {
+      async function waitForCanPlay(expectedGeneration) {
+        if (video.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA) {
           return;
         }
 
@@ -110,7 +112,7 @@
           let settled = false;
 
           const cleanup = () => {
-            video.removeEventListener('loadedmetadata', onLoaded);
+            video.removeEventListener('canplay', onCanPlay);
             video.removeEventListener('error', onError);
             video.removeEventListener('emptied', onEmptied);
           };
@@ -122,27 +124,36 @@
             callback(value);
           };
 
-          const onLoaded = () => finish(resolve);
+          const onCanPlay = () => finish(resolve);
+
           const onError = () => {
-            finish(reject, new Error('Unable to load media metadata.'));
-          };
-          const onEmptied = () => {
-            finish(reject, new Error('Media source was cleared.'));
+            finish(
+              reject,
+              new Error('Unable to load playable media.')
+            );
           };
 
-          video.addEventListener('loadedmetadata', onLoaded);
+          const onEmptied = () => {
+            finish(
+              reject,
+              new Error('Media source was cleared.')
+            );
+          };
+
+          video.addEventListener('canplay', onCanPlay);
           video.addEventListener('error', onError);
           video.addEventListener('emptied', onEmptied);
 
-          // Metadata might have loaded between the initial check and
-          // listener registration.
-          if (video.readyState >= HTMLMediaElement.HAVE_METADATA) {
+          // Recheck after registering listeners to avoid missing the event.
+          if (video.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA) {
             finish(resolve);
+          } else if (video.error) {
+            onError();
           }
         });
 
         if (expectedGeneration !== generation) {
-          throw new Error('Media changed while waiting for metadata.');
+          throw new Error('Media changed while waiting for playback readiness.');
         }
       }
 
@@ -182,7 +193,7 @@
         if (expectedGeneration !== generation) return;
 
         try {
-          await waitForMetadata(expectedGeneration);
+          await waitForCanPlay(expectedGeneration);
         } catch (error) {
           if (expectedGeneration === generation) {
             console.debug(
@@ -211,43 +222,48 @@
         video.volume = volume;
         video.muted = volume === 0;
 
-        const targetPosition = getTargetPosition(playback);
-        const duration = Number.isFinite(video.duration) && video.duration > 0
-          ? video.duration
-          : 0;
+        // Default playback loops in the browser, independently of mpv's
+        // position telemetry. Seeking it back to mpv's position would fight
+        // the loop near the end of each pass.
+        if (currentSource !== 'default') {
+          const targetPosition = getTargetPosition(playback);
+          const duration = Number.isFinite(video.duration) && video.duration > 0
+            ? video.duration
+            : 0;
 
-        const safeTarget = duration > 0
-          ? clamp(targetPosition, 0, Math.max(0, duration - 0.1))
-          : targetPosition;
+          const safeTarget = duration > 0
+            ? clamp(targetPosition, 0, Math.max(0, duration - 0.1))
+            : targetPosition;
 
-        const currentPosition = Number.isFinite(video.currentTime)
-          ? video.currentTime
-          : 0;
+          const currentPosition = Number.isFinite(video.currentTime)
+            ? video.currentTime
+            : 0;
 
-        const drift = Math.abs(currentPosition - safeTarget);
+          const drift = Math.abs(currentPosition - safeTarget);
 
-        // Do not issue repeated currentTime assignments while the browser
-        // is already seeking. The seeked event schedules another sync.
-        if (!video.seeking && (
-          drift >= DRIFT_CORRECTION_SECONDS ||
-          (
-            currentPosition < MINIMUM_SEEK_SECONDS &&
-            safeTarget >= DRIFT_CORRECTION_SECONDS
-          )
-        )) {
-          try {
-            console.debug(
-              `[StreamOps Player] Correcting position: ` +
-              `${currentPosition.toFixed(2)}s -> ${safeTarget.toFixed(2)}s ` +
-              `(mpv reported ${Number(playback?.position ?? 0).toFixed(2)}s)`
-            );
+          // Do not issue repeated currentTime assignments while the browser
+          // is already seeking. The seeked event schedules another sync.
+          if (!video.seeking && (
+            drift >= DRIFT_CORRECTION_SECONDS ||
+            (
+              currentPosition < MINIMUM_SEEK_SECONDS &&
+              safeTarget >= DRIFT_CORRECTION_SECONDS
+            )
+          )) {
+            try {
+              console.debug(
+                `[StreamOps Player] Correcting position: ` +
+                `${currentPosition.toFixed(2)}s -> ${safeTarget.toFixed(2)}s ` +
+                `(mpv reported ${Number(playback?.position ?? 0).toFixed(2)}s)`
+              );
 
-            video.currentTime = safeTarget;
-          } catch (error) {
-            console.warn(
-              '[StreamOps Player] Position correction failed:',
-              error
-            );
+              video.currentTime = safeTarget;
+            } catch (error) {
+              console.warn(
+                '[StreamOps Player] Position correction failed:',
+                error
+              );
+            }
           }
         }
 
@@ -292,6 +308,8 @@
 
         currentRequestId = null;
         currentMediaUrl = null;
+        currentSource = 'request';
+        video.loop = false;
 
         video.pause();
         video.removeAttribute('src');
@@ -343,6 +361,8 @@
 
             currentRequestId = track.requestId;
             currentMediaUrl = track.mediaUrl;
+            currentSource = track.source === 'default' ? 'default' : 'request';
+            video.loop = currentSource === 'default';
 
             video.pause();
             video.src = track.mediaUrl;
@@ -403,4 +423,5 @@
     })();
   </script>
 </body>
+
 </html>

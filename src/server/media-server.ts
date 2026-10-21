@@ -22,9 +22,12 @@ import { MediaHandler } from './media-handler.js';
 import { PageHandler } from './page-handler.js';
 import { PlayerState } from './player-state.js';
 import { runtimePath } from '../config/runtime-paths.js';
+import type { DefaultSongManager } from '../playback/default-song-manager.js';
+import { resolve } from 'node:path';
 
 const MAX_BODY_BYTES = 8 * 1024;
-const MEDIA_ROUTE_PREFIX = '/api/media/';
+
+const MEDIA_ROUTE_PREFIX = '/api/media'
 
 const ALLOWED_YOUTUBE_HOSTS = new Set([
     'youtube.com',
@@ -41,6 +44,7 @@ export class MediaServer {
     private readonly mediaHandler: MediaHandler;
     private readonly pageHandler: PageHandler;
     private readonly playerState: PlayerState;
+    private readonly defaultMediaHandler: MediaHandler;
 
     private playbackCoordinator: PlaybackCoordinator | null = null;
 
@@ -50,15 +54,20 @@ export class MediaServer {
         mediaDir: string,
         private readonly trackResolver: TrackResolver,
         private readonly transcoder: MediaTranscoder,
+        private readonly defaultSongManager: DefaultSongManager,
     ) {
         const resolvedMediaDir = runtimePath(mediaDir);
 
         this.mediaHandler = new MediaHandler(resolvedMediaDir);
+        this.defaultMediaHandler = new MediaHandler(
+            resolve(runtimePath('data/default-song')),
+            '/api/default-media/',
+        );
 
         this.pageHandler = new PageHandler({
-            root: runtimePath('public/player-test.html'),
+            root: runtimePath('public/browser-player.html'),
             player: runtimePath('public/player.html'),
-            testPlayer: runtimePath('public/player-test.html'),
+            testPlayer: runtimePath('public/browser-player.html'),
             queue: runtimePath('public/queue.html'),
             playedNow: runtimePath('public/played-now.html'),
         });
@@ -74,6 +83,37 @@ export class MediaServer {
                 },
             );
         });
+    }
+
+    private async handleDefaultMedia(
+        request: IncomingMessage,
+        response: ServerResponse,
+        pathname: string,
+        defaultSongManager: DefaultSongManager,
+    ): Promise<void> {
+        const match = /^\/api\/default-media\/([a-f0-9-]{36})$/i.exec(pathname);
+
+        if (!match) {
+            response.statusCode = 404;
+            response.end('Not found');
+            return;
+        }
+
+        const media = defaultSongManager.getMediaById(match[1]);
+
+        if (!media) {
+            response.statusCode = 404;
+            response.end('Media not found');
+            return;
+        }
+
+        this.defaultMediaHandler.register(media);
+
+        await this.defaultMediaHandler.handle(
+            request,
+            response,
+            pathname,
+        );
     }
 
     async start(): Promise<void> {
@@ -218,6 +258,16 @@ export class MediaServer {
             }
 
             await this.handlePlayerControl(request, response);
+            return;
+        }
+
+        if (pathname.startsWith('/api/default-media/')) {
+            await this.handleDefaultMedia(
+                request,
+                response,
+                pathname,
+                this.defaultSongManager,
+            );
             return;
         }
 

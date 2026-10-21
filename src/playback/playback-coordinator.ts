@@ -11,6 +11,7 @@ import type {
   PreparedMedia,
   MediaTranscoder,
 } from './media-transcoder.js';
+import type { DefaultSongManager } from './default-song-manager.js';
 
 export interface PlayerTrack {
   requestId: string;
@@ -19,6 +20,7 @@ export interface PlayerTrack {
   requester: string;
   duration: number | null;
   mediaUrl: string;
+  source: 'request' | 'default';
 }
 
 export interface PlayerState {
@@ -28,21 +30,19 @@ export interface PlayerState {
 export class PlaybackCoordinator {
   private readonly prepared = new Map<string, PreparedMedia>();
   private currentMedia: PreparedMedia | null = null;
-
   private pumping = false;
   private rerun = false;
+  private defaultRestartRevision = 0;
 
   constructor(
     private readonly queue: SongRequestQueue,
     private readonly transcoder: MediaTranscoder,
+    private readonly defaultSong: DefaultSongManager,
     private readonly registerMedia: (media: PreparedMedia) => void,
     private readonly unregisterMedia: (mediaId: string) => void,
   ) { }
 
-  async requestSong(
-    message: ChatMessage,
-    query: string,
-  ): Promise<string> {
+  async requestSong(message: ChatMessage, query: string): Promise<string> {
     let request: SongRequest;
 
     try {
@@ -57,18 +57,15 @@ export class PlaybackCoordinator {
 
     try {
       const resolved = await this.queue.resolveRequest(request.id);
-
       this.schedulePump();
 
       const title = resolved.track?.title ?? resolved.query;
-
       return `Added "${title}" to the song queue.`;
     } catch (error) {
       console.error(
         `[Playback] Failed to resolve "${request.query}":`,
         error,
       );
-
       this.schedulePump();
       throw error;
     }
@@ -79,20 +76,45 @@ export class PlaybackCoordinator {
   }
 
   getPlayerState(origin: string): PlayerState {
-    const current = this.queue.getCurrent();
+    const snapshot = this.queue.getSnapshot();
+    const current = snapshot.current;
 
-    if (!current || !current.track || !this.currentMedia) {
+    if (current?.track && this.currentMedia) {
+      return {
+        current: {
+          requestId: current.id,
+          title: current.track.title,
+          uploader: current.track.uploader,
+          requester: current.requester.displayName,
+          duration: current.track.duration,
+          mediaUrl: `${origin}/api/media/${this.currentMedia.id}`,
+          source: 'request',
+        },
+      };
+    }
+
+    // Keep the default playing while requests are resolving or preparing.
+    // Only an active request without registered media should suppress fallback.
+    if (current) {
+      return { current: null };
+    }
+
+    const fallback = this.defaultSong.getDefault();
+
+    if (!fallback) {
       return { current: null };
     }
 
     return {
       current: {
-        requestId: current.id,
-        title: current.track.title,
-        uploader: current.track.uploader,
-        requester: current.requester.displayName,
-        duration: current.track.duration,
-        mediaUrl: `${origin}/api/media/${this.currentMedia.id}`,
+        requestId:
+          `default-${fallback.media.id}-${this.defaultRestartRevision}`,
+        title: fallback.track.title,
+        uploader: fallback.track.uploader,
+        requester: 'Default song',
+        duration: fallback.track.duration,
+        mediaUrl: `${origin}/api/default-media/${fallback.media.id}`,
+        source: 'default',
       },
     };
   }
@@ -104,11 +126,24 @@ export class PlaybackCoordinator {
   async skipTrack(): Promise<boolean> {
     const current = this.queue.getCurrent();
 
-    if (!current) {
+    if (current) {
+      return this.finishTrack(current.id);
+    }
+
+    const snapshot = this.queue.getSnapshot();
+
+    // Do not skip unresolved/pending requests. Only restart the fallback
+    // when the queue is genuinely empty.
+    if (snapshot.pending.length > 0) {
       return false;
     }
 
-    return this.finishTrack(current.id);
+    if (!this.defaultSong.getDefault()) {
+      return false;
+    }
+
+    this.defaultRestartRevision += 1;
+    return true;
   }
 
   private async finishTrack(requestId: string): Promise<boolean> {
@@ -196,7 +231,6 @@ export class PlaybackCoordinator {
       }
     }
 
-    // Only promote a prepared request to the current track.
     if (!this.queue.getCurrent()) {
       const selected = this.queue.takeNextReady();
 
@@ -213,7 +247,6 @@ export class PlaybackCoordinator {
         }
       }
 
-      // With a current track established, prepare one track ahead.
       this.rerun = true;
     }
   }
