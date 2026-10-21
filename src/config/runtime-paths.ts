@@ -1,6 +1,6 @@
-
 import { dirname, isAbsolute, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isSea } from 'node:sea';
 
 function getRuntimeDirectory(): string {
   const configuredHome = process.env.SONG_REQUEST_HOME?.trim();
@@ -9,14 +9,11 @@ function getRuntimeDirectory(): string {
     return resolve(configuredHome);
   }
 
-  if (process.env.NODE_ENV === 'production') {
+  if (isSea()) {
     return dirname(process.execPath);
   }
 
-  return resolve(
-    dirname(fileURLToPath(import.meta.url)),
-    '../..',
-  );
+  return resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 }
 
 export const runtimeDirectory = getRuntimeDirectory();

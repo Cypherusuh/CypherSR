@@ -10,6 +10,30 @@ import { TrackResolver } from './queue/track-resolver.js';
 import { MediaServer } from './server/media-server.js';
 import { TwitchClient } from './twitch/twitch-client.js';
 import { SpotifyTrackResolver } from './queue/spotify-track-resolver.js';
+import { spawn } from 'node:child_process';
+
+async function copyToClipboard(text: string): Promise<void> {
+  if (process.platform !== 'win32') {
+    return;
+  }
+
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn('clip.exe', [], {
+      windowsHide: true,
+      stdio: ['pipe', 'ignore', 'ignore'],
+    });
+
+    child.once('error', reject);
+    child.once('close', (code) => {
+      if (code === 0) {
+        resolve();
+      } else {
+        reject(new Error(`clip.exe exited with code ${code}`));
+      }
+    });
+    child.stdin.end(text);
+  });
+}
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -167,33 +191,52 @@ async function main(): Promise<void> {
     `[SongRequest] Connected to Twitch channel: ${config.twitch.channel}`,
   );
   console.log('[SongRequest] Listening for chat messages.');
-  console.log('[Playback] Open the local player page to start playback.');
+  const baseUrl = `http://${config.server.host}:${config.server.port}`;
 
-  let shuttingDown = false;
+  console.log('[OBS] Browser Source URLs:');
+  console.log(`  Player:     ${baseUrl}/player.html`);
+  console.log(`  Played Now: ${baseUrl}/played-now.html`);
+  console.log(`  Queue:      ${baseUrl}/queue.html`);
+  console.log(`  Test:       ${baseUrl}/player-test.html`);
 
-  const shutdown = async (): Promise<void> => {
-    if (shuttingDown) {
-      return;
+  let shutdownPromise: Promise<void> | undefined;
+
+  const shutdown = (): Promise<void> => {
+    if (shutdownPromise) {
+      return shutdownPromise;
     }
 
-    shuttingDown = true;
-    console.log('\n[SongRequest] Disconnecting...');
+    shutdownPromise = (async () => {
+      console.log('\n[SongRequest] Disconnecting...');
 
-    const results = await Promise.allSettled([
-      twitch.disconnect(),
-      stopMediaServer(),
-    ]);
+      const results = await Promise.allSettled([
+        twitch.disconnect(),
+        stopMediaServer(),
+      ]);
 
-    for (const result of results) {
-      if (result.status === 'rejected') {
-        console.error(
-          '[SongRequest] Shutdown failed:',
-          result.reason,
-        );
-        process.exitCode = 1;
+      for (const result of results) {
+        if (result.status === 'rejected') {
+          console.error(
+            '[SongRequest] Shutdown failed:',
+            result.reason,
+          );
+          process.exitCode = 1;
+        }
       }
-    }
+
+      console.log('[SongRequest] Shutdown complete.');
+    })();
+
+    return shutdownPromise;
   };
+
+  const handleShutdownSignal = (): void => {
+    void shutdown();
+  };
+
+  process.once('SIGINT', handleShutdownSignal);
+  process.once('SIGTERM', handleShutdownSignal);
+  process.once('SIGHUP', handleShutdownSignal);
 
   process.once('SIGINT', () => {
     void shutdown();
