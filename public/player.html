@@ -37,6 +37,7 @@
       'use strict';
 
       const STATE_URL = '/api/player/state';
+      const ENDED_URL = '/api/player/ended';
       const POLL_INTERVAL_MS = 500;
       const DRIFT_CORRECTION_SECONDS = 2.0;
       const MINIMUM_SEEK_SECONDS = 0.15;
@@ -46,6 +47,7 @@
       let currentRequestId = null;
       let currentMediaUrl = null;
       let currentSource = 'request';
+      let endedRequestId = null;
       let polling = false;
       let generation = 0;
 
@@ -213,6 +215,8 @@
           return;
         }
 
+        if (endedRequestId === currentRequestId) return;
+
         const paused = playback?.paused !== false;
         const volume = Number.isFinite(playback?.volume)
           ? clamp(playback.volume, 0, 1)
@@ -309,6 +313,7 @@
         currentRequestId = null;
         currentMediaUrl = null;
         currentSource = 'request';
+        endedRequestId = null;
         video.loop = false;
 
         video.pause();
@@ -362,6 +367,7 @@
             currentRequestId = track.requestId;
             currentMediaUrl = track.mediaUrl;
             currentSource = track.source === 'default' ? 'default' : 'request';
+            endedRequestId = null;
             video.loop = currentSource === 'default';
 
             video.pause();
@@ -386,6 +392,46 @@
           polling = false;
         }
       }
+
+      video.addEventListener('ended', async () => {
+        const requestId = currentRequestId;
+
+        if (
+          !requestId ||
+          currentSource === 'default' ||
+          endedRequestId === requestId
+        ) {
+          return;
+        }
+
+        endedRequestId = requestId;
+
+        try {
+          const response = await fetch(ENDED_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ requestId })
+          });
+
+          if (!response.ok) {
+            throw new Error(`Track completion returned ${response.status}`);
+          }
+
+          const result = await response.json();
+
+          if (!result.accepted) {
+            console.warn(
+              '[StreamOps Player] Track completion was not accepted:',
+              requestId
+            );
+          }
+        } catch (error) {
+          console.warn(
+            '[StreamOps Player] Could not notify server that track ended:',
+            error
+          );
+        }
+      });
 
       video.addEventListener('seeked', () => {
         if (

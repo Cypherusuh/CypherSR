@@ -197,6 +197,14 @@ async function main(): Promise<void> {
     );
   };
 
+  twitch.onMessage((message) => {
+    console.log(
+      `[Twitch] ${message.displayName}: ${message.message}`,
+    );
+
+    void commandRouter.handleMessage(message);
+  });
+
   try {
     await resolveAndSaveChannel();
     await startMediaServer();
@@ -223,14 +231,6 @@ async function main(): Promise<void> {
       throw loginError;
     }
   }
-
-  twitch.onMessage((message) => {
-    console.log(
-      `[Twitch] ${message.displayName}: ${message.message}`,
-    );
-
-    void commandRouter.handleMessage(message);
-  });
 
   try {
     await twitch.sendMessage('Radio and song requests enabled');
