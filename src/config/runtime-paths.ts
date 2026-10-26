@@ -1,14 +1,9 @@
+
 import { dirname, isAbsolute, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isSea } from 'node:sea';
 
-function getRuntimeDirectory(): string {
-  const configuredHome = process.env.SONG_REQUEST_HOME?.trim();
-
-  if (configuredHome) {
-    return resolve(configuredHome);
-  }
-
+function getAppDirectory(): string {
   if (isSea()) {
     return dirname(process.execPath);
   }
@@ -16,13 +11,19 @@ function getRuntimeDirectory(): string {
   return resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 }
 
-export const runtimeDirectory = getRuntimeDirectory();
+export const appDirectory = getAppDirectory();
+
+const configuredHome = process.env.SONG_REQUEST_HOME?.trim();
+
+export const dataDirectory = configuredHome
+  ? resolve(configuredHome)
+  : resolve(appDirectory, 'data');
 
 export function runtimePath(path: string): string {
-  return isAbsolute(path) ? path : resolve(runtimeDirectory, path);
+  return isAbsolute(path)
+    ? path
+    : resolve(appDirectory, path);
 }
-
-export const dataDirectory = runtimePath('data');
 
 export function dataPath(path: string): string {
   return resolve(dataDirectory, path);
