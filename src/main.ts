@@ -13,7 +13,6 @@ import { SpotifyTrackResolver } from './queue/spotify-track-resolver.js';
 import { spawn } from 'node:child_process';
 import { DefaultSongManager } from './playback/default-song-manager.js';
 import { dataPath } from './config/runtime-paths.js'
-import { ResolvedTrack } from './queue/types.js';
 
 async function copyToClipboard(text: string): Promise<void> {
   if (process.platform !== 'win32') {
@@ -298,13 +297,14 @@ async function main(): Promise<void> {
     return shutdownPromise;
   };
 
-  const handleShutdownSignal = (): void => {
-    void shutdown();
-  };
+const handleShutdownSignal = (): void => {
+  void shutdown();
+};
 
-  process.once('SIGINT', handleShutdownSignal);
-  process.once('SIGTERM', handleShutdownSignal);
-  process.once('SIGHUP', handleShutdownSignal);
+process.once('SIGINT', handleShutdownSignal);
+process.once('SIGTERM', handleShutdownSignal);
+process.once('SIGHUP', handleShutdownSignal);
+
 
   process.once('SIGINT', () => {
     void shutdown();
