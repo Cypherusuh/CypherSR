@@ -1,5 +1,4 @@
-
-use reqwest::{blocking::Client, Url};
+use reqwest::{Url, blocking::Client};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
@@ -28,18 +27,9 @@ const MANIFEST_TIMEOUT_SECS: u64 = 30;
 const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
 const MAX_UPDATE_BYTES: u64 = 1024 * 1024 * 1024;
 
-const LEGACY_REQUIRED_PATHS: &[&str] = &[
-    CORE_EXE,
-    VERSION_FILE,
-    "public",
-    VENDOR_DIR,
-];
+const LEGACY_REQUIRED_PATHS: &[&str] = &[CORE_EXE, VERSION_FILE, "public", VENDOR_DIR];
 
-const APP_UPDATE_PATHS: &[&str] = &[
-    CORE_EXE,
-    VERSION_FILE,
-    "public",
-];
+const APP_UPDATE_PATHS: &[&str] = &[CORE_EXE, VERSION_FILE, "public"];
 
 const VENDOR_UPDATE_PATHS: &[&str] = &[VENDOR_DIR];
 
@@ -147,9 +137,7 @@ fn compare_versions(left: &str, right: &str) -> AppResult<i32> {
         }
 
         for (index, part) in parts.iter().enumerate() {
-            if part.is_empty()
-                || !part.bytes().all(|byte| byte.is_ascii_digit())
-            {
+            if part.is_empty() || !part.bytes().all(|byte| byte.is_ascii_digit()) {
                 return Err(format!("Invalid version: {value}").into());
             }
 
@@ -178,10 +166,7 @@ fn valid_version(version: &str) -> bool {
 }
 
 fn valid_sha256(value: &str) -> bool {
-    value.len() == 64
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_hexdigit())
+    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 fn read_version_file(path: &Path) -> AppResult<String> {
@@ -189,29 +174,19 @@ fn read_version_file(path: &Path) -> AppResult<String> {
     let installed: InstalledVersion = serde_json::from_str(&content)?;
 
     if !valid_version(&installed.version) {
-        return Err(format!(
-            "Invalid installed version in {}",
-            path.display()
-        )
-        .into());
+        return Err(format!("Invalid installed version in {}", path.display()).into());
     }
 
     Ok(installed.version)
 }
 
 fn read_installed_app_version(paths: &AppPaths) -> String {
-    read_version_file(&paths.root.join(VERSION_FILE))
-        .unwrap_or_else(|_| "0.0.0".to_string())
+    read_version_file(&paths.root.join(VERSION_FILE)).unwrap_or_else(|_| "0.0.0".to_string())
 }
 
 fn read_installed_vendor_version(paths: &AppPaths) -> String {
-    read_version_file(
-        &paths
-            .root
-            .join(VENDOR_DIR)
-            .join(VENDOR_VERSION_FILE),
-    )
-    .unwrap_or_else(|_| "0.0.0".to_string())
+    read_version_file(&paths.root.join(VENDOR_DIR).join(VENDOR_VERSION_FILE))
+        .unwrap_or_else(|_| "0.0.0".to_string())
 }
 
 fn is_test_mode() -> bool {
@@ -223,13 +198,9 @@ fn is_test_mode() -> bool {
 fn manifest_url() -> String {
     if is_test_mode() {
         env::var("CYPHERSR_UPDATE_MANIFEST_URL")
-            .unwrap_or_else(|_| {
-                "http://127.0.0.1:8765/latest.json".to_string()
-            })
+            .unwrap_or_else(|_| "http://127.0.0.1:8765/latest.json".to_string())
     } else {
-        format!(
-            "https://github.com/{REPOSITORY}/releases/latest/download/latest.json"
-        )
+        format!("https://github.com/{REPOSITORY}/releases/latest/download/latest.json")
     }
 }
 
@@ -237,20 +208,58 @@ fn validate_local_test_url(url: &str) -> AppResult<()> {
     let parsed = Url::parse(url)?;
 
     if parsed.scheme() != "http"
-        || !matches!(
-            parsed.host_str(),
-            Some("127.0.0.1") | Some("localhost")
-        )
+        || !matches!(parsed.host_str(), Some("127.0.0.1") | Some("localhost"))
         || parsed.port().is_none()
         || parsed.username() != ""
         || parsed.password().is_some()
         || parsed.query().is_some()
         || parsed.fragment().is_some()
     {
-        return Err(
-            "Test update URLs must use HTTP on localhost with an explicit port"
-                .into(),
-        );
+        return Err("Test update URLs must use HTTP on localhost with an explicit port".into());
+    }
+
+    Ok(())
+}
+
+fn validate_release_asset_url(url: &str, expected_asset: &str) -> AppResult<()> {
+    let parsed = Url::parse(url)?;
+
+    if parsed.scheme() != "https"
+        || parsed.host_str() != Some("github.com")
+        || parsed.port().is_some()
+        || parsed.username() != ""
+        || parsed.password().is_some()
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+    {
+        return Err("Unexpected release asset URL".into());
+    }
+
+    let expected_prefix = format!("/{REPOSITORY}/releases/download/");
+
+    let remainder = parsed
+        .path()
+        .strip_prefix(&expected_prefix)
+        .ok_or("Unexpected release asset URL path")?;
+
+    let parts: Vec<&str> = remainder.split('/').collect();
+
+    if parts.len() != 2 {
+        return Err("Unexpected release asset URL path".into());
+    }
+
+    // Releases now use Desktop-version tags, independently of the
+    // backend or vendor version contained in the asset filename.
+    let desktop_tag_version = parts[0]
+        .strip_prefix("desktop-v")
+        .ok_or("Release tag must begin with desktop-v")?;
+
+    if !valid_version(desktop_tag_version) {
+        return Err("Invalid Desktop version in release tag".into());
+    }
+
+    if parts[1] != expected_asset {
+        return Err(format!("Unexpected release asset filename: expected {expected_asset}").into());
     }
 
     Ok(())
@@ -261,24 +270,9 @@ fn validate_app_url(url: &str, version: &str) -> AppResult<()> {
         return validate_local_test_url(url);
     }
 
-    let expected_path = format!(
-        "/{REPOSITORY}/releases/download/v{version}/update-only-{version}.zip"
-    );
+    let expected_asset = format!("CypherSR-Backend-Update-v{version}-win-x64.zip");
 
-    let parsed = Url::parse(url)?;
-
-    if parsed.scheme() != "https"
-        || parsed.host_str() != Some("github.com")
-        || parsed.path() != expected_path
-        || parsed.username() != ""
-        || parsed.password().is_some()
-        || parsed.query().is_some()
-        || parsed.fragment().is_some()
-    {
-        return Err("Unexpected app update download URL".into());
-    }
-
-    Ok(())
+    validate_release_asset_url(url, &expected_asset)
 }
 
 fn validate_vendor_url(url: &str, vendor_version: &str) -> AppResult<()> {
@@ -286,53 +280,9 @@ fn validate_vendor_url(url: &str, vendor_version: &str) -> AppResult<()> {
         return validate_local_test_url(url);
     }
 
-    let parsed = Url::parse(url)?;
+    let expected_asset = format!("vendor-{vendor_version}-win-x64.zip");
 
-    if parsed.scheme() != "https"
-        || parsed.host_str() != Some("github.com")
-        || parsed.username() != ""
-        || parsed.password().is_some()
-        || parsed.query().is_some()
-        || parsed.fragment().is_some()
-    {
-        return Err("Unexpected vendor update download URL".into());
-    }
-
-    // Vendor files may be hosted by an older app release. The release
-    // tag must still have a numeric x.y.z version, and the asset name
-    // must match the vendor version in the manifest.
-    let expected_prefix = format!(
-        "/{REPOSITORY}/releases/download/"
-    );
-
-    let remainder = parsed
-        .path()
-        .strip_prefix(&expected_prefix)
-        .ok_or("Unexpected vendor release URL path")?;
-
-    let parts: Vec<&str> = remainder.split('/').collect();
-
-    if parts.len() != 2 {
-        return Err("Unexpected vendor release URL path".into());
-    }
-
-    let tag = parts[0]
-        .strip_prefix('v')
-        .ok_or("Vendor release tag must begin with v")?;
-
-    if !valid_version(tag) {
-        return Err("Invalid version in vendor release tag".into());
-    }
-
-    let expected_asset = format!(
-        "vendor-{vendor_version}-win-x64.zip"
-    );
-
-    if parts[1] != expected_asset {
-        return Err("Vendor asset name does not match its version".into());
-    }
-
-    Ok(())
+    validate_release_asset_url(url, &expected_asset)
 }
 
 fn client(timeout: Duration) -> AppResult<Client> {
@@ -388,9 +338,7 @@ fn fetch_manifest() -> AppResult<UpdateManifest> {
             }
 
             if !valid_sha256(sha256) {
-                return Err(
-                    "Invalid vendor SHA-256 checksum in latest.json".into(),
-                );
+                return Err("Invalid vendor SHA-256 checksum in latest.json".into());
             }
 
             validate_vendor_url(url, version)?;
@@ -399,21 +347,16 @@ fn fetch_manifest() -> AppResult<UpdateManifest> {
             // A manifest may intentionally publish app updates only.
         }
         _ => {
-            return Err(
-                "Vendor manifest fields must include vendor, vendorUrl, \
+            return Err("Vendor manifest fields must include vendor, vendorUrl, \
                  and vendorSha256 together"
-                    .into(),
-            );
+                .into());
         }
     }
 
     Ok(manifest)
 }
 
-fn download_update(
-    paths: &AppPaths,
-    spec: &UpdateSpec,
-) -> AppResult<PathBuf> {
+fn download_update(paths: &AppPaths, spec: &UpdateSpec) -> AppResult<PathBuf> {
     fs::create_dir_all(&paths.temp)?;
 
     let filename = match spec.kind {
@@ -481,8 +424,7 @@ fn download_update(
 
     if !actual_hash.eq_ignore_ascii_case(&spec.sha256) {
         return Err(
-            format!("{kind_label} update SHA-256 verification failed; update rejected")
-                .into(),
+            format!("{kind_label} update SHA-256 verification failed; update rejected").into(),
         );
     }
 
@@ -519,11 +461,7 @@ fn allowed_archive_path(path: &Path, kind: UpdateKind) -> bool {
     }
 }
 
-fn extract_update(
-    paths: &AppPaths,
-    zip_path: &Path,
-    kind: UpdateKind,
-) -> AppResult<()> {
+fn extract_update(paths: &AppPaths, zip_path: &Path, kind: UpdateKind) -> AppResult<()> {
     if paths.staging.exists() {
         fs::remove_dir_all(&paths.staging)?;
     }
@@ -577,18 +515,14 @@ fn extract_update(
     Ok(())
 }
 
-fn validate_staging(
-    paths: &AppPaths,
-    spec: &UpdateSpec,
-) -> AppResult<()> {
+fn validate_staging(paths: &AppPaths, spec: &UpdateSpec) -> AppResult<()> {
     match spec.kind {
         UpdateKind::App => {
             for name in APP_UPDATE_PATHS {
                 if !paths.staging.join(name).exists() {
-                    return Err(format!(
-                        "App update archive is missing required item: {name}"
-                    )
-                    .into());
+                    return Err(
+                        format!("App update archive is missing required item: {name}").into(),
+                    );
                 }
             }
 
@@ -597,19 +531,13 @@ fn validate_staging(
                 || !paths.staging.join("public").is_dir()
                 || !paths.staging.join("public/player.html").is_file()
             {
-                return Err(
-                    "App update archive contains invalid required items".into(),
-                );
+                return Err("App update archive contains invalid required items".into());
             }
 
-            let version = read_version_file(
-                &paths.staging.join(VERSION_FILE),
-            )?;
+            let version = read_version_file(&paths.staging.join(VERSION_FILE))?;
 
             if version != spec.version {
-                return Err(
-                    "App update ZIP version does not match its manifest".into(),
-                );
+                return Err("App update ZIP version does not match its manifest".into());
             }
         }
         UpdateKind::Vendor => {
@@ -621,17 +549,13 @@ fn validate_staging(
                 || !vendor_dir.join("ffmpeg/bin/ffmpeg.exe").is_file()
                 || !version_file.is_file()
             {
-                return Err(
-                    "Vendor update archive is missing required files".into(),
-                );
+                return Err("Vendor update archive is missing required files".into());
             }
 
             let version = read_version_file(&version_file)?;
 
             if version != spec.version {
-                return Err(
-                    "Vendor ZIP version does not match its manifest".into(),
-                );
+                return Err("Vendor ZIP version does not match its manifest".into());
             }
         }
     }
@@ -643,11 +567,7 @@ fn copy_path(source: &Path, destination: &Path) -> AppResult<()> {
     let metadata = fs::symlink_metadata(source)?;
 
     if metadata.file_type().is_symlink() {
-        return Err(format!(
-            "Refusing to copy symbolic link: {}",
-            source.display()
-        )
-        .into());
+        return Err(format!("Refusing to copy symbolic link: {}", source.display()).into());
     }
 
     if metadata.is_dir() {
@@ -655,10 +575,7 @@ fn copy_path(source: &Path, destination: &Path) -> AppResult<()> {
 
         for entry in fs::read_dir(source)? {
             let entry = entry?;
-            copy_path(
-                &entry.path(),
-                &destination.join(entry.file_name()),
-            )?;
+            copy_path(&entry.path(), &destination.join(entry.file_name()))?;
         }
     } else if metadata.is_file() {
         if let Some(parent) = destination.parent() {
@@ -667,11 +584,7 @@ fn copy_path(source: &Path, destination: &Path) -> AppResult<()> {
 
         fs::copy(source, destination)?;
     } else {
-        return Err(format!(
-            "Unsupported filesystem entry: {}",
-            source.display()
-        )
-        .into());
+        return Err(format!("Unsupported filesystem entry: {}", source.display()).into());
     }
 
     Ok(())
@@ -696,10 +609,7 @@ fn remove_path(path: &Path) -> AppResult<()> {
     Ok(())
 }
 
-fn write_journal(
-    paths: &AppPaths,
-    state: &UpdateState,
-) -> AppResult<()> {
+fn write_journal(paths: &AppPaths, state: &UpdateState) -> AppResult<()> {
     fs::create_dir_all(&paths.temp)?;
 
     let temporary_journal = paths.temp.join("update-state.json.new");
@@ -721,13 +631,10 @@ fn read_journal(paths: &AppPaths) -> AppResult<Option<UpdateState>> {
         return Ok(None);
     }
 
-    let mut state: UpdateState =
-        serde_json::from_slice(&fs::read(&paths.journal)?)?;
+    let mut state: UpdateState = serde_json::from_slice(&fs::read(&paths.journal)?)?;
 
     if state.phase != "installing" {
-        return Err(
-            "Unknown update recovery state; refusing cleanup".into(),
-        );
+        return Err("Unknown update recovery state; refusing cleanup".into());
     }
 
     // Backward compatibility with journals created by the previous
@@ -741,26 +648,18 @@ fn read_journal(paths: &AppPaths) -> AppResult<Option<UpdateState>> {
 
     for name in &state.targets {
         if !LEGACY_REQUIRED_PATHS.contains(&name.as_str()) {
-            return Err(format!(
-                "Unexpected path in recovery journal: {name}"
-            )
-            .into());
+            return Err(format!("Unexpected path in recovery journal: {name}").into());
         }
 
         if !state.had_original.contains_key(name) {
-            return Err(
-                "Update recovery journal is incomplete".into(),
-            );
+            return Err("Update recovery journal is incomplete".into());
         }
     }
 
     Ok(Some(state))
 }
 
-fn restore_backup(
-    paths: &AppPaths,
-    state: &UpdateState,
-) -> AppResult<()> {
+fn restore_backup(paths: &AppPaths, state: &UpdateState) -> AppResult<()> {
     log("Recovering the previous installation...");
 
     for name in state.targets.iter().rev() {
@@ -774,10 +673,7 @@ fn restore_backup(
 
         if had_original {
             if !backup.exists() {
-                return Err(format!(
-                    "Cannot recover {name}: backup is missing"
-                )
-                .into());
+                return Err(format!("Cannot recover {name}: backup is missing").into());
             }
 
             remove_path(&destination)?;
@@ -808,11 +704,7 @@ fn recover_interrupted_update(paths: &AppPaths) -> AppResult<()> {
     Ok(())
 }
 
-fn install_update(
-    paths: &AppPaths,
-    spec: &UpdateSpec,
-    zip_path: &Path,
-) -> AppResult<()> {
+fn install_update(paths: &AppPaths, spec: &UpdateSpec, zip_path: &Path) -> AppResult<()> {
     extract_update(paths, zip_path, spec.kind)?;
     validate_staging(paths, spec)?;
 
@@ -859,10 +751,7 @@ fn install_update(
             remove_path(&destination)?;
 
             if !staged.exists() {
-                return Err(format!(
-                    "Staged update item is missing: {name}"
-                )
-                .into());
+                return Err(format!("Staged update item is missing: {name}").into());
             }
 
             fs::rename(&staged, &destination)?;
@@ -1045,10 +934,7 @@ fn run() -> AppResult<()> {
 
 fn main() {
     if let Err(error) = run() {
-        eprintln!(
-            "[CypherSR] Fatal error: {}",
-            error_message(error.as_ref())
-        );
+        eprintln!("[CypherSR] Fatal error: {}", error_message(error.as_ref()));
 
         std::process::exit(1);
     }

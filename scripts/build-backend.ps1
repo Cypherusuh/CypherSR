@@ -50,13 +50,20 @@ if ($vendorVersion -notmatch '^\d+\.\d+\.\d+$') {
     throw "app-version.json must contain vendorVersion in the format 1.0.0"
 }
 
-$updateAssetName = "update-only-$appVersion.zip"
+# Backend and vendor versions are independent of the Desktop version.
+#
+# Standalone backend release:
+#   Tag: v{BackendVersion}
+#   CypherSR-Backend-Update-v{BackendVersion}-win-x64.zip
+#   vendor-{VendorVersion}-win-x64.zip
+#
+# When these assets are also published in a Desktop release, the
+# Desktop publisher should update the merged manifest URLs to use
+# that Desktop release's tag.
+$updateAssetName = "CypherSR-Backend-Update-v$appVersion-win-x64.zip"
 $vendorAssetName = "vendor-$vendorVersion-win-x64.zip"
 $fullAssetName = "CypherSR-$appVersion-win-x64.zip"
 
-# Both assets are published under this app release tag.
-# This script creates the vendor ZIP on every build, even when
-# vendorVersion has not changed. Upload it with the other assets.
 $releaseTag = "v$appVersion"
 $releaseBaseUrl = "https://github.com/$repository/releases/download/$releaseTag"
 
@@ -89,13 +96,15 @@ New-Item -ItemType Directory -Force -Path `
 
 # Preserve user data. Never clean or package release\data.
 $dataDirectory = Join-Path $release "data"
+
 New-Item -ItemType Directory -Force -Path $dataDirectory |
     Out-Null
 
-Write-Host "CypherSR app version: $appVersion"
-Write-Host "Vendor version:       $vendorVersion"
-Write-Host "App update asset:     $updateAssetName"
-Write-Host "Vendor asset:         $vendorAssetName"
+Write-Host "CypherSR backend version: $appVersion"
+Write-Host "Vendor version:            $vendorVersion"
+Write-Host "Standalone release tag:    $releaseTag"
+Write-Host "Backend update asset:      $updateAssetName"
+Write-Host "Vendor asset:              $vendorAssetName"
 
 # ------------------------------------------------------------
 # 2. Build the Node.js Single Executable Application
@@ -281,13 +290,14 @@ $versionJson = @{
 # 6. Stage package contents
 #
 # Full ZIP:
-#   CypherSR/CypherSR.exe
-#   CypherSR/CypherSR-core.exe
-#   CypherSR/version.json
-#   CypherSR/public/
-#   CypherSR/vendor/
+#   CypherSR/
+#     CypherSR.exe
+#     CypherSR-core.exe
+#     version.json
+#     public/
+#     vendor/
 #
-# App update ZIP:
+# Backend update ZIP:
 #   CypherSR-core.exe
 #   version.json
 #   public/
@@ -368,7 +378,7 @@ Copy-Item -LiteralPath (Join-Path $release $launcherName) `
 Copy-Item -LiteralPath (Join-Path $release "vendor") `
     -Destination $fullAppStage -Recurse -Force
 
-# App-only update: deliberately excludes vendor and launcher.
+# Backend-only update: deliberately excludes vendor and launcher.
 Copy-AppUpdatePayload -Destination $appUpdateStage
 
 # Vendor update: archive contains a vendor/ directory at its root.
@@ -384,7 +394,11 @@ Compress-StageZip -Stage $appUpdateStage -Destination $updateZip
 Compress-StageZip -Stage $vendorStage -Destination $vendorZip
 
 # ------------------------------------------------------------
-# 7. Generate latest.json with independent app/vendor versions
+# 7. Generate standalone latest.json
+#
+# The standalone backend manifest points to release v{appVersion}.
+# The Desktop publisher should generate its own merged manifest and
+# use the Desktop release tag for assets uploaded to that release.
 # ------------------------------------------------------------
 
 $appSha256 = (
@@ -444,12 +458,12 @@ if ($writtenManifest.version -ne $appVersion) {
 }
 
 if ($writtenManifest.url -ne $updateUrl) {
-    throw "Manifest app update URL is incorrect."
+    throw "Manifest backend update URL is incorrect."
 }
 
 if ($writtenManifest.sha256 -ne $appSha256 -or
     $writtenManifest.sha256 -notmatch '^[a-f0-9]{64}$') {
-    throw "Manifest app update SHA-256 verification failed."
+    throw "Manifest backend update SHA-256 verification failed."
 }
 
 if ($writtenManifest.vendor -ne $vendorVersion) {
@@ -465,7 +479,7 @@ if ($writtenManifest.vendorSha256 -ne $vendorSha256 -or
     throw "Manifest vendor SHA-256 verification failed."
 }
 
-# Verify that the generated vendor version marker matches the config.
+# Verify the generated vendor version marker.
 $writtenVendorVersion = Get-Content -LiteralPath `
     (Join-Path $release "vendor\$vendorVersionJsonName") -Raw |
     ConvertFrom-Json
@@ -474,32 +488,44 @@ if ($writtenVendorVersion.version -ne $vendorVersion) {
     throw "Vendor version marker does not match app-version.json."
 }
 
+# Verify the standalone URLs use the backend release tag and filenames.
+$expectedReleaseBaseUrl = "https://github.com/$repository/releases/download/v$appVersion"
+
+if ($writtenManifest.url -ne "$expectedReleaseBaseUrl/$updateAssetName") {
+    throw "Backend update URL does not match the expected standalone release URL."
+}
+
+if ($writtenManifest.vendorUrl -ne "$expectedReleaseBaseUrl/$vendorAssetName") {
+    throw "Vendor URL does not match the expected standalone release URL."
+}
+
 # ------------------------------------------------------------
 # 9. Build summary
 # ------------------------------------------------------------
 
 Write-Host ""
 Write-Host "============================================"
-Write-Host "CypherSR build completed successfully"
+Write-Host "CypherSR backend build completed successfully"
 Write-Host "============================================"
-Write-Host "App version:       $appVersion"
-Write-Host "Vendor version:    $vendorVersion"
+Write-Host "Backend version:    $appVersion"
+Write-Host "Vendor version:     $vendorVersion"
+Write-Host "Standalone tag:     $releaseTag"
 Write-Host ""
-Write-Host "Launcher:          $releaseLauncher"
-Write-Host "Core:              $(Join-Path $release $coreName)"
-Write-Host "Full ZIP:          $fullZip"
-Write-Host "App update ZIP:    $updateZip"
-Write-Host "Vendor update ZIP: $vendorZip"
-Write-Host "Manifest:          $manifestPath"
+Write-Host "Launcher:           $releaseLauncher"
+Write-Host "Core:               $(Join-Path $release $coreName)"
+Write-Host "Full ZIP:           $fullZip"
+Write-Host "Backend update ZIP: $updateZip"
+Write-Host "Vendor update ZIP:  $vendorZip"
+Write-Host "Manifest:           $manifestPath"
 Write-Host ""
-Write-Host "App update URL:    $updateUrl"
-Write-Host "App SHA-256:       $appSha256"
+Write-Host "Backend update URL: $updateUrl"
+Write-Host "Backend SHA-256:    $appSha256"
 Write-Host ""
-Write-Host "Vendor update URL: $vendorUrl"
-Write-Host "Vendor SHA-256:    $vendorSha256"
+Write-Host "Vendor update URL:  $vendorUrl"
+Write-Host "Vendor SHA-256:     $vendorSha256"
 Write-Host ""
-Write-Host "Upload all three ZIPs and latest.json to release $releaseTag."
-Write-Host "App updates exclude vendor files and the launcher."
+Write-Host "Upload the ZIP assets and latest.json to release $releaseTag."
+Write-Host "Backend updates exclude vendor files and the launcher."
 Write-Host "Vendor updates are packaged separately."
 Write-Host "Existing release\data was preserved."
 Write-Host "Neither ZIP contains the data folder."
