@@ -1,6 +1,5 @@
 
 import { dirname, isAbsolute, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { isSea } from 'node:sea';
 
 function getAppDirectory(): string {
@@ -8,7 +7,9 @@ function getAppDirectory(): string {
     return dirname(process.execPath);
   }
 
-  return resolve(dirname(fileURLToPath(import.meta.url)), '../..');
+  // Development builds are launched from the project root.
+  // Avoid import.meta.url because the SEA bundle uses CommonJS.
+  return resolve(process.cwd());
 }
 
 export const appDirectory = getAppDirectory();
