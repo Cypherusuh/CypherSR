@@ -17,14 +17,13 @@ $cargoManifest = Join-Path $root "launcher-rust\Cargo.toml"
 $rustLauncher = Join-Path $root "launcher-rust\target\release\CypherSR.exe"
 
 $repository = "Cypherusuh/CypherSR"
-$updateAssetName = "CypherSR-update-win-x64.zip"
 
 $launcherName = "CypherSR.exe"
 $coreName = "CypherSR-core.exe"
 $versionJsonName = "version.json"
 
 # ------------------------------------------------------------
-# Validate build inputs
+# 1. Validate build inputs and load app version
 # ------------------------------------------------------------
 
 if (-not (Test-Path -LiteralPath $versionFile -PathType Leaf)) {
@@ -39,6 +38,12 @@ $appVersion = [string]$versionConfig.version
 if ($appVersion -notmatch '^\d+\.\d+\.\d+$') {
     throw "app-version.json must contain a version like 1.0.0"
 }
+
+# Version-specific update asset name.
+$updateAssetName = "update-only-$appVersion.zip"
+
+# GitHub release tags are assumed to use the v prefix.
+$updateUrl = "https://github.com/$repository/releases/download/v$appVersion/$updateAssetName"
 
 foreach ($path in @(
     $publicSource,
@@ -65,9 +70,12 @@ $dataDirectory = Join-Path $release "data"
 New-Item -ItemType Directory -Force -Path $dataDirectory |
     Out-Null
 
+Write-Host "CypherSR version: $appVersion"
+Write-Host "Update asset:     $updateAssetName"
+
 # ------------------------------------------------------------
-# Build a Node.js Single Executable Application
-# Used for CypherSR-core.exe only.
+# 2. Build the Node.js Single Executable Application
+#    This builds CypherSR-core.exe only.
 # ------------------------------------------------------------
 
 function Build-SeaExecutable {
@@ -156,23 +164,20 @@ function Build-SeaExecutable {
         throw "Build output was not created: $temporaryExe"
     }
 
-    # The app must be closed if Windows locks the destination executable.
+    # Close the app first if Windows locks the destination executable.
     Move-Item -LiteralPath $temporaryExe `
         -Destination $outputExe -Force
 
     Write-Host "Created $outputExe"
 }
 
-# ------------------------------------------------------------
-# 1. Build the Node.js backend
-# ------------------------------------------------------------
-
 Build-SeaExecutable `
     -EntryPoint "src/main.ts" `
     -OutputName $coreName
 
 # ------------------------------------------------------------
-# 2. Build the Rust launcher
+# 3. Build the Rust launcher
+#    The icon is embedded by launcher-rust/build.rs.
 # ------------------------------------------------------------
 
 Write-Host ""
@@ -196,7 +201,8 @@ Copy-Item -LiteralPath $rustLauncher `
 Write-Host "Created $releaseLauncher"
 
 # ------------------------------------------------------------
-# 3. Copy runtime assets
+# 4. Copy runtime assets into release
+#    Preserve release\data.
 # ------------------------------------------------------------
 
 Write-Host ""
@@ -205,7 +211,6 @@ Write-Host "Copying application assets..."
 $releasePublic = Join-Path $release "public"
 $releaseVendor = Join-Path $release "vendor"
 
-# These are generated runtime assets, not persistent user data.
 Remove-Item -LiteralPath @(
     $releasePublic,
     $releaseVendor
@@ -228,7 +233,7 @@ Copy-Item -LiteralPath $ffmpegSource `
     -Destination (Join-Path $releaseFfmpegDir "ffmpeg.exe") -Force
 
 # ------------------------------------------------------------
-# 4. Write installed version
+# 5. Write the installed version manifest
 # ------------------------------------------------------------
 
 $versionJson = @{
@@ -242,8 +247,22 @@ $versionJson = @{
 )
 
 # ------------------------------------------------------------
-# 5. Stage the update payload
-# Excludes the Rust launcher and persistent data.
+# 6. Stage package contents
+#
+# Full ZIP:
+#   CypherSR/CypherSR.exe
+#   CypherSR/CypherSR-core.exe
+#   CypherSR/version.json
+#   CypherSR/public/
+#   CypherSR/vendor/
+#
+# Update ZIP:
+#   CypherSR-core.exe
+#   version.json
+#   public/
+#   vendor/
+#
+# Neither ZIP contains data/.
 # ------------------------------------------------------------
 
 function Copy-UpdatePayload {
@@ -280,7 +299,7 @@ function Compress-StageZip {
     Remove-Item -LiteralPath $Destination `
         -Force -ErrorAction SilentlyContinue
 
-    # Archive the stage's contents, not the stage directory itself.
+    # Archive the stage contents, not the stage directory itself.
     Compress-Archive `
         -Path (Join-Path $Stage "*") `
         -DestinationPath $Destination `
@@ -291,7 +310,6 @@ function Compress-StageZip {
     }
 }
 
-# Recreate staging directories to avoid stale package files.
 $fullStage = Join-Path $packageRoot "full"
 $updateStage = Join-Path $packageRoot "update"
 
@@ -303,8 +321,7 @@ foreach ($stage in @($fullStage, $updateStage)) {
         Out-Null
 }
 
-# Full portable package:
-# CypherSR/<launcher, core, version, public, vendor>
+# Build the complete portable package inside a CypherSR folder.
 $fullAppStage = Join-Path $fullStage "CypherSR"
 
 New-Item -ItemType Directory -Path $fullAppStage -Force |
@@ -315,8 +332,7 @@ Copy-UpdatePayload -Destination $fullAppStage
 Copy-Item -LiteralPath (Join-Path $release $launcherName) `
     -Destination $fullAppStage -Force
 
-# Update package ZIP root:
-# core, version, public, vendor
+# Build the update package without the launcher or user data.
 Copy-UpdatePayload -Destination $updateStage
 
 $fullZip = Join-Path $release "CypherSR-$appVersion-win-x64.zip"
@@ -326,15 +342,19 @@ Compress-StageZip -Stage $fullStage -Destination $fullZip
 Compress-StageZip -Stage $updateStage -Destination $updateZip
 
 # ------------------------------------------------------------
-# 6. Generate the update manifest
+# 7. Generate latest.json
+#
+# Publish latest.json as a separate asset on the GitHub release.
+# The URL in this manifest points to the version-specific ZIP.
 # ------------------------------------------------------------
 
-$sha256 = (Get-FileHash -LiteralPath $updateZip -Algorithm SHA256).
-    Hash.ToLowerInvariant()
+$sha256 = (
+    Get-FileHash -LiteralPath $updateZip -Algorithm SHA256
+).Hash.ToLowerInvariant()
 
 $manifest = @{
     version = $appVersion
-    url = "https://github.com/$repository/releases/latest/download/$updateAssetName"
+    url = $updateUrl
     sha256 = $sha256
 } | ConvertTo-Json
 
@@ -347,7 +367,7 @@ $manifestPath = Join-Path $release "latest.json"
 )
 
 # ------------------------------------------------------------
-# 7. Verify release artifacts
+# 8. Verify release artifacts and manifest
 # ------------------------------------------------------------
 
 $requiredReleaseFiles = @(
@@ -368,15 +388,13 @@ foreach ($path in $requiredReleaseFiles) {
     }
 }
 
-# Verify that the generated manifest points at the intended update asset.
 $writtenManifest = Get-Content -LiteralPath $manifestPath -Raw |
     ConvertFrom-Json
 
-$expectedUpdateUrl =
-    "https://github.com/$repository/releases/latest/download/$updateAssetName"
+$expectedUpdateUrl = $updateUrl
 
 if ($writtenManifest.url -ne $expectedUpdateUrl) {
-    throw "Manifest URL does not match the Rust launcher's expected URL."
+    throw "Manifest URL does not match the expected version-specific update URL."
 }
 
 if ($writtenManifest.version -ne $appVersion) {
@@ -387,18 +405,32 @@ if ($writtenManifest.sha256 -ne $sha256) {
     throw "Manifest SHA-256 verification failed."
 }
 
+if ($writtenManifest.sha256 -notmatch '^[a-f0-9]{64}$') {
+    throw "Manifest SHA-256 is not a valid 64-character lowercase hexadecimal hash."
+}
+
+# ------------------------------------------------------------
+# 9. Build summary
+# ------------------------------------------------------------
+
 Write-Host ""
-Write-Host "Build complete."
+Write-Host "============================================"
+Write-Host "CypherSR build completed successfully"
+Write-Host "============================================"
 Write-Host "App version: $appVersion"
-Write-Host "Launcher:    $(Join-Path $release $launcherName)"
+Write-Host ""
+Write-Host "Launcher:    $releaseLauncher"
 Write-Host "Core:        $(Join-Path $release $coreName)"
 Write-Host "Full ZIP:    $fullZip"
 Write-Host "Update ZIP:  $updateZip"
 Write-Host "Manifest:    $manifestPath"
+Write-Host ""
+Write-Host "Update URL:  $updateUrl"
 Write-Host "SHA-256:     $sha256"
 Write-Host ""
 Write-Host "The Rust launcher is built with Cargo."
-Write-Host "The automatic update ZIP excludes the stable launcher."
+Write-Host "The update ZIP excludes the launcher and user data."
 Write-Host "latest.json is a separate GitHub release asset."
 Write-Host "Existing release\data was preserved."
 Write-Host "Neither ZIP contains the data folder."
+Write-Host "============================================"
