@@ -62,7 +62,7 @@ if ($vendorVersion -notmatch '^\d+\.\d+\.\d+$') {
 # that Desktop release's tag.
 $updateAssetName = "CypherSR-Backend-Update-v$appVersion-win-x64.zip"
 $vendorAssetName = "vendor-$vendorVersion-win-x64.zip"
-$fullAssetName = "CypherSR-$appVersion-win-x64.zip"
+$fullAssetName = "CypherSR-Lite-v$appVersion-win-x64.zip"
 
 $releaseTag = "v$appVersion"
 $releaseBaseUrl = "https://github.com/$repository/releases/download/$releaseTag"
