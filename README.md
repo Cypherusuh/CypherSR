@@ -2,6 +2,15 @@
 
 A portable Twitch song request player for Windows, built for streamers using OBS.
 
+## Download
+
+**[Download the latest release](https://github.com/Cypherusuh/CypherSR/releases/latest)**
+
+- **FULL** — For users who want the desktop app with the video player.
+- **LITE** — For potato laptops or low-end PCs. Lightweight version without the desktop video player.
+
+Download the latest version from the [Releases page](https://github.com/Cypherusuh/CypherSR/releases/latest) and choose the package that fits your needs.
+
 ## Features
 
 - **Song requests:** `!sr <URL/title>` supports YouTube and Spotify links.
