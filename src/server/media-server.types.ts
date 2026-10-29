@@ -55,3 +55,17 @@ export function errorCode(
 export function isPrematureClose(error: unknown): boolean {
     return errorCode(error) === 'ERR_STREAM_PREMATURE_CLOSE';
 }
+
+export interface TwitchApiStatus {
+    authenticated: boolean;
+    connecting: boolean;
+    connected: boolean;
+    username: string | null;
+    error: string | null;
+}
+
+export interface TwitchApiController {
+    getStatus(): TwitchApiStatus;
+    connect(): Promise<void>;
+    disconnect(): Promise<void>;
+}

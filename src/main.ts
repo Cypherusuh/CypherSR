@@ -12,7 +12,7 @@ import { TwitchClient } from './twitch/twitch-client.js';
 import { SpotifyTrackResolver } from './queue/spotify-track-resolver.js';
 import { spawn } from 'node:child_process';
 import { DefaultSongManager } from './playback/default-song-manager.js';
-import { dataPath } from './config/runtime-paths.js'
+import { dataPath } from './config/runtime-paths.js';
 
 async function copyToClipboard(text: string): Promise<void> {
   if (process.platform !== 'win32') {
@@ -33,6 +33,7 @@ async function copyToClipboard(text: string): Promise<void> {
         reject(new Error(`clip.exe exited with code ${code}`));
       }
     });
+
     child.stdin.end(text);
   });
 }
@@ -47,24 +48,6 @@ async function main(): Promise<void> {
     scopes: config.twitch.scopes,
     tokenStore,
   });
-
-  const savedTokens = await tokenStore.load();
-
-  if (!savedTokens) {
-    console.log('[Twitch] No saved credentials found. Starting login...');
-    await twitch.login();
-  }
-
-  const resolveAndSaveChannel = async (): Promise<void> => {
-    const channel = await twitch.getAuthenticatedLogin();
-
-    config.twitch.channel = channel;
-    twitch.setChannel(channel);
-    saveConfig(config);
-
-    console.log(`[Twitch] Authenticated account: ${channel}`);
-    console.log('[Config] Twitch channel saved to data/config.json.');
-  };
 
   const spotifyResolver = new SpotifyTrackResolver();
 
@@ -116,8 +99,8 @@ async function main(): Promise<void> {
     queue,
     transcoder,
     defaultSongManager,
-    media => mediaServer.register(media),
-    mediaId => mediaServer.unregister(mediaId),
+    (media) => mediaServer.register(media),
+    (mediaId) => mediaServer.unregister(mediaId),
   );
 
   mediaServer.attachPlaybackCoordinator(playback);
@@ -135,25 +118,25 @@ async function main(): Promise<void> {
       },
 
       requestSong: (message, query) => playback.requestSong(message, query),
-
       getQueue: () => playback.getQueue(),
-
       skipTrack: () => playback.skipTrack(),
-      removeLatestRequest: (userId) => queue.removeLatestPendingByUser(userId),
+
+      removeLatestRequest: (userId) =>
+        queue.removeLatestPendingByUser(userId),
+
       getDefaultSong: () => {
         const song = defaultSongManager.getDefault();
 
         return song
           ? {
-            query: song.query,
-            track: song.track,
-          }
+              query: song.query,
+              track: song.track,
+            }
           : null;
       },
 
-      setDefaultSong: async query => {
+      setDefaultSong: async (query) => {
         const song = await defaultSongManager.setDefault(query);
-
         return `Default song set to "${song.track.title}".`;
       },
 
@@ -196,6 +179,128 @@ async function main(): Promise<void> {
     );
   };
 
+  const twitchStatus = {
+    authenticated: false,
+    connecting: false,
+    connected: false,
+    username: null as string | null,
+    error: null as string | null,
+  };
+
+  let credentialsValidated = false;
+  let twitchConnectionPromise: Promise<void> | null = null;
+
+  const resolveAndSaveChannel = async (): Promise<void> => {
+    const channel = await twitch.getAuthenticatedLogin();
+
+    config.twitch.channel = channel;
+    twitch.setChannel(channel);
+    saveConfig(config);
+
+    console.log(`[Twitch] Authenticated account: ${channel}`);
+    console.log('[Config] Twitch channel saved to data/config.json.');
+  };
+
+  const connectTwitch = (): Promise<void> => {
+    if (twitchConnectionPromise) {
+      return twitchConnectionPromise;
+    }
+
+    twitchConnectionPromise = (async () => {
+      twitchStatus.connecting = true;
+      twitchStatus.error = null;
+
+      try {
+        const savedTokens = await tokenStore.load();
+
+        if (!savedTokens) {
+          console.log(
+            '[Twitch] No saved credentials found. Starting login...',
+          );
+          await twitch.login();
+        }
+
+        try {
+          await resolveAndSaveChannel();
+          credentialsValidated = true;
+
+          twitchStatus.authenticated = true;
+          twitchStatus.username = config.twitch.channel;
+
+          await twitch.connect();
+        } catch (error) {
+          if (!isAuthenticationFailure(error)) {
+            throw error;
+          }
+
+          console.warn(
+            '[Twitch] Saved credentials are no longer valid. Starting login again.',
+          );
+
+          await twitch.disconnect().catch(() => undefined);
+          await tokenStore.clear();
+
+          credentialsValidated = false;
+          twitchStatus.authenticated = false;
+          twitchStatus.connected = false;
+          twitchStatus.username = null;
+
+          await twitch.login();
+          await resolveAndSaveChannel();
+
+          credentialsValidated = true;
+          twitchStatus.authenticated = true;
+          twitchStatus.username = config.twitch.channel;
+
+          await twitch.connect();
+        }
+
+        twitchStatus.connected = true;
+        twitchStatus.error = null;
+
+        console.log(
+          `[SongRequest] Connected to Twitch channel: ${config.twitch.channel}`,
+        );
+      } catch (error) {
+        twitchStatus.connected = false;
+        twitchStatus.authenticated = credentialsValidated;
+        twitchStatus.username = credentialsValidated
+          ? config.twitch.channel
+          : null;
+
+        twitchStatus.error =
+          error instanceof Error ? error.message : String(error);
+
+        throw error;
+      } finally {
+        twitchStatus.connecting = false;
+        twitchConnectionPromise = null;
+      }
+    })();
+
+    return twitchConnectionPromise;
+  };
+
+  const disconnectTwitch = async (): Promise<void> => {
+    await twitch.disconnect();
+
+    twitchStatus.connected = false;
+    twitchStatus.connecting = false;
+    twitchStatus.error = null;
+    twitchStatus.authenticated = credentialsValidated;
+    twitchStatus.username = credentialsValidated
+      ? config.twitch.channel
+      : null;
+
+    console.log('[Twitch] Disconnected.');
+  };
+
+  mediaServer.setTwitchController({
+    getStatus: () => ({ ...twitchStatus }),
+    connect: connectTwitch,
+    disconnect: disconnectTwitch,
+  });
+
   twitch.onMessage((message) => {
     console.log(
       `[Twitch] ${message.displayName}: ${message.message}`,
@@ -204,31 +309,14 @@ async function main(): Promise<void> {
     void commandRouter.handleMessage(message);
   });
 
+  // Start the HTTP server before OAuth so the UI can poll status during login.
+  await startMediaServer();
+
   try {
-    await resolveAndSaveChannel();
-    await startMediaServer();
-    await twitch.connect();
+    await connectTwitch();
   } catch (error) {
-    if (!isAuthenticationFailure(error)) {
-      await stopMediaServer();
-      throw error;
-    }
-
-    console.warn(
-      '[Twitch] Saved credentials are no longer valid. Starting login again.',
-    );
-
-    try {
-      await tokenStore.clear();
-      await twitch.login();
-
-      await resolveAndSaveChannel();
-      await startMediaServer();
-      await twitch.connect();
-    } catch (loginError) {
-      await stopMediaServer();
-      throw loginError;
-    }
+    await stopMediaServer();
+    throw error;
   }
 
   try {
@@ -241,9 +329,6 @@ async function main(): Promise<void> {
     );
   }
 
-  console.log(
-    `[SongRequest] Connected to Twitch channel: ${config.twitch.channel}`,
-  );
   console.log('[SongRequest] Listening for chat messages.');
   console.log('');
   console.log('=== Song Request Commands ===');
@@ -277,7 +362,7 @@ async function main(): Promise<void> {
       console.log('\n[SongRequest] Disconnecting...');
 
       const results = await Promise.allSettled([
-        twitch.disconnect(),
+        disconnectTwitch(),
         stopMediaServer(),
       ]);
 
@@ -297,22 +382,13 @@ async function main(): Promise<void> {
     return shutdownPromise;
   };
 
-const handleShutdownSignal = (): void => {
-  void shutdown();
-};
-
-process.once('SIGINT', handleShutdownSignal);
-process.once('SIGTERM', handleShutdownSignal);
-process.once('SIGHUP', handleShutdownSignal);
-
-
-  process.once('SIGINT', () => {
+  const handleShutdownSignal = (): void => {
     void shutdown();
-  });
+  };
 
-  process.once('SIGTERM', () => {
-    void shutdown();
-  });
+  process.once('SIGINT', handleShutdownSignal);
+  process.once('SIGTERM', handleShutdownSignal);
+  process.once('SIGHUP', handleShutdownSignal);
 }
 
 main().catch((error: unknown) => {

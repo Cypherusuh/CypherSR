@@ -15,6 +15,7 @@ import type { PlaybackCoordinator } from '../playback/playback-coordinator.js';
 import {
     isObject,
     isPrematureClose,
+    type TwitchApiController,
     type JsonObject,
 } from './media-server.types.js';
 
@@ -47,6 +48,12 @@ export class MediaServer {
     private readonly defaultMediaHandler: MediaHandler;
 
     private playbackCoordinator: PlaybackCoordinator | null = null;
+
+    private twitchController: TwitchApiController | null = null;
+
+    setTwitchController(controller: TwitchApiController): void {
+        this.twitchController = controller;
+    }
 
     constructor(
         private readonly host: string,
@@ -273,6 +280,87 @@ export class MediaServer {
 
         if (pathname.startsWith(MEDIA_ROUTE_PREFIX)) {
             await this.mediaHandler.handle(request, response, pathname);
+            return;
+        }
+
+        if (pathname === '/api/twitch/status') {
+            if (!this.requireMethod(request, response, 'GET')) {
+                return;
+            }
+
+            if (!this.twitchController) {
+                this.sendError(response, 503, 'Twitch status is not initialized');
+                return;
+            }
+
+            this.sendJson(response, 200, this.twitchController.getStatus());
+            return;
+        }
+
+        if (pathname === '/api/twitch/connect') {
+            if (!this.requireMethod(request, response, 'POST')) {
+                return;
+            }
+
+            if (!this.twitchController) {
+                this.sendError(response, 503, 'Twitch controller is not initialized');
+                return;
+            }
+
+            const status = this.twitchController.getStatus();
+
+            if (status.connecting) {
+                this.sendJson(response, 202, {
+                    accepted: true,
+                    message: 'Twitch connection is already in progress.',
+                });
+                return;
+            }
+
+            if (status.connected) {
+                this.sendJson(response, 200, {
+                    accepted: true,
+                    message: 'Twitch is already connected.',
+                });
+                return;
+            }
+
+            void this.twitchController.connect().catch((error: unknown) => {
+                console.error('[Twitch] Connection request failed:', error);
+            });
+
+            this.sendJson(response, 202, {
+                accepted: true,
+                message: 'Twitch connection started.',
+            });
+            return;
+        }
+
+        if (pathname === '/api/twitch/disconnect') {
+            if (!this.requireMethod(request, response, 'POST')) {
+                return;
+            }
+
+            if (!this.twitchController) {
+                this.sendError(response, 503, 'Twitch controller is not initialized');
+                return;
+            }
+
+            try {
+                await this.twitchController.disconnect();
+
+                this.sendJson(response, 200, {
+                    accepted: true,
+                    message: 'Twitch disconnected.',
+                });
+            } catch (error) {
+                this.sendJson(response, 500, {
+                    error: error instanceof Error
+                        ? error.message
+                        : 'Failed to disconnect Twitch',
+                });
+            }
+
             return;
         }
 
