@@ -1,6 +1,6 @@
 {
   "name": "@cypherusuh/song-request",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "description": "Reusable Twitch song-request bot and playback engine",
   "type": "module",
   "main": "./dist/index.js",
@@ -35,6 +35,6 @@
     "vitest": "^4.1.12"
   },
   "dependencies": {
-    "streamops-twitch-connector": "^0.1.5"
+    "streamops-twitch-connector": "^0.2.0"
   }
 }
