@@ -13,14 +13,20 @@ $publicSource = Join-Path $root "public"
 $ytDlpSource = Join-Path $root "vendor\yt-dlp.exe"
 $ffmpegSource = Join-Path $root "vendor\ffmpeg\bin\ffmpeg.exe"
 
+$cargoManifest = Join-Path $root "launcher-rust\Cargo.toml"
+$rustLauncher = Join-Path $root "launcher-rust\target\release\CypherSR.exe"
+
 $repository = "Cypherusuh/CypherSR"
-$updateAssetName = "CypherSR-update-only-win-x64.zip"
+$updateAssetName = "CypherSR-update-win-x64.zip"
 
 $launcherName = "CypherSR.exe"
 $coreName = "CypherSR-core.exe"
 $versionJsonName = "version.json"
 
-# Validate build inputs.
+# ------------------------------------------------------------
+# Validate build inputs
+# ------------------------------------------------------------
+
 if (-not (Test-Path -LiteralPath $versionFile -PathType Leaf)) {
     throw "Missing app-version.json"
 }
@@ -34,26 +40,35 @@ if ($appVersion -notmatch '^\d+\.\d+\.\d+$') {
     throw "app-version.json must contain a version like 1.0.0"
 }
 
-foreach ($path in @($publicSource, $ytDlpSource, $ffmpegSource)) {
+foreach ($path in @(
+    $publicSource,
+    $ytDlpSource,
+    $ffmpegSource,
+    $cargoManifest
+)) {
     if (-not (Test-Path -LiteralPath $path)) {
         throw "Required build input not found: $path"
     }
 }
 
-if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
-    throw "Node.js is required to build the SEA executables."
-}
-
-if (-not (Get-Command npx -ErrorAction SilentlyContinue)) {
-    throw "npx is required to build the SEA executables."
+foreach ($commandName in @("node", "npx", "cargo")) {
+    if (-not (Get-Command $commandName -ErrorAction SilentlyContinue)) {
+        throw "$commandName is required to build CypherSR."
+    }
 }
 
 New-Item -ItemType Directory -Force -Path `
     $release, $build, $packageRoot | Out-Null
 
-# Preserve user data; never include it in release packages.
-New-Item -ItemType Directory -Force -Path `
-    (Join-Path $release "data") | Out-Null
+# Preserve user data. Never clean or package release\data.
+$dataDirectory = Join-Path $release "data"
+New-Item -ItemType Directory -Force -Path $dataDirectory |
+    Out-Null
+
+# ------------------------------------------------------------
+# Build a Node.js Single Executable Application
+# Used for CypherSR-core.exe only.
+# ------------------------------------------------------------
 
 function Build-SeaExecutable {
     param(
@@ -77,15 +92,16 @@ function Build-SeaExecutable {
     $outputExe = Join-Path $release $OutputName
     $temporaryExe = Join-Path $build "$name.building.exe"
 
-    Remove-Item -LiteralPath $bundle, $blob, $configPath, $temporaryExe `
-        -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath @(
+        $bundle,
+        $blob,
+        $configPath,
+        $temporaryExe
+    ) -Force -ErrorAction SilentlyContinue
 
     Write-Host ""
     Write-Host "Bundling $EntryPoint -> $OutputName"
 
-    # SEA requires a CommonJS bundle.
-    # Treat import.meta incompatibilities as errors to prevent this warning
-    # from silently returning in future builds.
     npx esbuild $entryPath `
         --bundle `
         --platform=node `
@@ -123,16 +139,16 @@ function Build-SeaExecutable {
     $nodeCommand = Get-Command node -ErrorAction Stop
     $nodeExe = $nodeCommand.Source
 
-    # Build and inject into a temporary executable first.
-    # The existing release executable remains untouched until success.
-    Copy-Item -LiteralPath $nodeExe -Destination $temporaryExe -Force
+    Copy-Item -LiteralPath $nodeExe `
+        -Destination $temporaryExe -Force
 
     npx postject $temporaryExe NODE_SEA_BLOB $blob `
         --sentinel-fuse NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2
 
     if ($LASTEXITCODE -ne 0) {
-        Remove-Item -LiteralPath $temporaryExe -Force `
-            -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $temporaryExe `
+            -Force -ErrorAction SilentlyContinue
+
         throw "SEA injection failed for $OutputName"
     }
 
@@ -140,31 +156,60 @@ function Build-SeaExecutable {
         throw "Build output was not created: $temporaryExe"
     }
 
-    # This may fail if the destination executable is still running.
-    # In that case, close CypherSR before rebuilding.
-    Move-Item -LiteralPath $temporaryExe -Destination $outputExe -Force
+    # The app must be closed if Windows locks the destination executable.
+    Move-Item -LiteralPath $temporaryExe `
+        -Destination $outputExe -Force
 
     Write-Host "Created $outputExe"
 }
 
-# Build the core and stable launcher.
+# ------------------------------------------------------------
+# 1. Build the Node.js backend
+# ------------------------------------------------------------
+
 Build-SeaExecutable `
     -EntryPoint "src/main.ts" `
     -OutputName $coreName
 
-Build-SeaExecutable `
-    -EntryPoint "src/launcher.ts" `
-    -OutputName $launcherName
+# ------------------------------------------------------------
+# 2. Build the Rust launcher
+# ------------------------------------------------------------
 
-# Refresh the visible runtime assets without deleting release\data.
+Write-Host ""
+Write-Host "Building Rust launcher..."
+
+cargo build --release --manifest-path $cargoManifest
+
+if ($LASTEXITCODE -ne 0) {
+    throw "Rust launcher build failed."
+}
+
+if (-not (Test-Path -LiteralPath $rustLauncher -PathType Leaf)) {
+    throw "Rust launcher executable not found: $rustLauncher"
+}
+
+$releaseLauncher = Join-Path $release $launcherName
+
+Copy-Item -LiteralPath $rustLauncher `
+    -Destination $releaseLauncher -Force
+
+Write-Host "Created $releaseLauncher"
+
+# ------------------------------------------------------------
+# 3. Copy runtime assets
+# ------------------------------------------------------------
+
 Write-Host ""
 Write-Host "Copying application assets..."
 
 $releasePublic = Join-Path $release "public"
 $releaseVendor = Join-Path $release "vendor"
 
-Remove-Item -LiteralPath $releasePublic, $releaseVendor `
-    -Recurse -Force -ErrorAction SilentlyContinue
+# These are generated runtime assets, not persistent user data.
+Remove-Item -LiteralPath @(
+    $releasePublic,
+    $releaseVendor
+) -Recurse -Force -ErrorAction SilentlyContinue
 
 Copy-Item -LiteralPath $publicSource `
     -Destination $releasePublic -Recurse -Force
@@ -173,8 +218,8 @@ $releaseYtDlp = Join-Path $releaseVendor "yt-dlp.exe"
 $releaseFfmpegDir = Join-Path $releaseVendor "ffmpeg\bin"
 
 New-Item -ItemType Directory -Force -Path `
-    (Split-Path -Parent $releaseYtDlp), $releaseFfmpegDir |
-    Out-Null
+    (Split-Path -Parent $releaseYtDlp),
+    $releaseFfmpegDir | Out-Null
 
 Copy-Item -LiteralPath $ytDlpSource `
     -Destination $releaseYtDlp -Force
@@ -182,7 +227,10 @@ Copy-Item -LiteralPath $ytDlpSource `
 Copy-Item -LiteralPath $ffmpegSource `
     -Destination (Join-Path $releaseFfmpegDir "ffmpeg.exe") -Force
 
-# Write the version used by the launcher to determine whether to update.
+# ------------------------------------------------------------
+# 4. Write installed version
+# ------------------------------------------------------------
+
 $versionJson = @{
     version = $appVersion
 } | ConvertTo-Json
@@ -193,15 +241,20 @@ $versionJson = @{
     [System.Text.UTF8Encoding]::new($false)
 )
 
+# ------------------------------------------------------------
+# 5. Stage the update payload
+# Excludes the Rust launcher and persistent data.
+# ------------------------------------------------------------
+
 function Copy-UpdatePayload {
     param(
         [Parameter(Mandatory = $true)]
         [string]$Destination
     )
 
-    New-Item -ItemType Directory -Path $Destination -Force | Out-Null
+    New-Item -ItemType Directory -Path $Destination -Force |
+        Out-Null
 
-    # Intentionally exclude CypherSR.exe and latest.json.
     Copy-Item -LiteralPath (Join-Path $release $coreName) `
         -Destination $Destination -Force
 
@@ -224,8 +277,8 @@ function Compress-StageZip {
         [string]$Destination
     )
 
-    Remove-Item -LiteralPath $Destination -Force `
-        -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $Destination `
+        -Force -ErrorAction SilentlyContinue
 
     # Archive the stage's contents, not the stage directory itself.
     Compress-Archive `
@@ -238,29 +291,32 @@ function Compress-StageZip {
     }
 }
 
-# Start with clean staging directories to avoid stale package files.
+# Recreate staging directories to avoid stale package files.
 $fullStage = Join-Path $packageRoot "full"
 $updateStage = Join-Path $packageRoot "update"
 
 foreach ($stage in @($fullStage, $updateStage)) {
-    Remove-Item -LiteralPath $stage -Recurse -Force `
-        -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $stage `
+        -Recurse -Force -ErrorAction SilentlyContinue
 
-    New-Item -ItemType Directory -Path $stage -Force | Out-Null
+    New-Item -ItemType Directory -Path $stage -Force |
+        Out-Null
 }
 
 # Full portable package:
-# CypherSR\<launcher, core, version, public, vendor>
+# CypherSR/<launcher, core, version, public, vendor>
 $fullAppStage = Join-Path $fullStage "CypherSR"
-New-Item -ItemType Directory -Path $fullAppStage -Force | Out-Null
+
+New-Item -ItemType Directory -Path $fullAppStage -Force |
+    Out-Null
 
 Copy-UpdatePayload -Destination $fullAppStage
 
 Copy-Item -LiteralPath (Join-Path $release $launcherName) `
     -Destination $fullAppStage -Force
 
-# Automatic update package:
-# ZIP root contains only core, version, public, and vendor.
+# Update package ZIP root:
+# core, version, public, vendor
 Copy-UpdatePayload -Destination $updateStage
 
 $fullZip = Join-Path $release "CypherSR-$appVersion-win-x64.zip"
@@ -269,7 +325,10 @@ $updateZip = Join-Path $release $updateAssetName
 Compress-StageZip -Stage $fullStage -Destination $fullZip
 Compress-StageZip -Stage $updateStage -Destination $updateZip
 
-# Generate the manifest as a separate release asset.
+# ------------------------------------------------------------
+# 6. Generate the update manifest
+# ------------------------------------------------------------
+
 $sha256 = (Get-FileHash -LiteralPath $updateZip -Algorithm SHA256).
     Hash.ToLowerInvariant()
 
@@ -287,7 +346,10 @@ $manifestPath = Join-Path $release "latest.json"
     [System.Text.UTF8Encoding]::new($false)
 )
 
-# Verify required release files exist before reporting success.
+# ------------------------------------------------------------
+# 7. Verify release artifacts
+# ------------------------------------------------------------
+
 $requiredReleaseFiles = @(
     (Join-Path $release $launcherName),
     (Join-Path $release $coreName),
@@ -306,6 +368,25 @@ foreach ($path in $requiredReleaseFiles) {
     }
 }
 
+# Verify that the generated manifest points at the intended update asset.
+$writtenManifest = Get-Content -LiteralPath $manifestPath -Raw |
+    ConvertFrom-Json
+
+$expectedUpdateUrl =
+    "https://github.com/$repository/releases/latest/download/$updateAssetName"
+
+if ($writtenManifest.url -ne $expectedUpdateUrl) {
+    throw "Manifest URL does not match the Rust launcher's expected URL."
+}
+
+if ($writtenManifest.version -ne $appVersion) {
+    throw "Manifest version does not match app-version.json."
+}
+
+if ($writtenManifest.sha256 -ne $sha256) {
+    throw "Manifest SHA-256 verification failed."
+}
+
 Write-Host ""
 Write-Host "Build complete."
 Write-Host "App version: $appVersion"
@@ -316,6 +397,7 @@ Write-Host "Update ZIP:  $updateZip"
 Write-Host "Manifest:    $manifestPath"
 Write-Host "SHA-256:     $sha256"
 Write-Host ""
+Write-Host "The Rust launcher is built with Cargo."
 Write-Host "The automatic update ZIP excludes the stable launcher."
 Write-Host "latest.json is a separate GitHub release asset."
 Write-Host "Existing release\data was preserved."

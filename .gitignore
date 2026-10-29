@@ -56,3 +56,4 @@ data/
 SRLite.zip
 
 .test
+/launcher-rust/target/
