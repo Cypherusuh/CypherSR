@@ -21,29 +21,47 @@ $repository = "Cypherusuh/CypherSR"
 $launcherName = "CypherSR.exe"
 $coreName = "CypherSR-core.exe"
 $versionJsonName = "version.json"
+$vendorVersionJsonName = "vendor-version.json"
 
 # ------------------------------------------------------------
-# 1. Validate build inputs and load app version
+# 1. Validate build inputs and load versions
 # ------------------------------------------------------------
 
 if (-not (Test-Path -LiteralPath $versionFile -PathType Leaf)) {
     throw "Missing app-version.json"
 }
 
-$versionConfig = Get-Content -LiteralPath $versionFile -Raw |
-    ConvertFrom-Json
-
-$appVersion = [string]$versionConfig.version
-
-if ($appVersion -notmatch '^\d+\.\d+\.\d+$') {
-    throw "app-version.json must contain a version like 1.0.0"
+try {
+    $versionConfig = Get-Content -LiteralPath $versionFile -Raw |
+        ConvertFrom-Json
+}
+catch {
+    throw "Failed to parse app-version.json: $($_.Exception.Message)"
 }
 
-# Version-specific update asset name.
-$updateAssetName = "update-only-$appVersion.zip"
+$appVersion = [string]$versionConfig.version
+$vendorVersion = [string]$versionConfig.vendorVersion
 
-# GitHub release tags are assumed to use the v prefix.
-$updateUrl = "https://github.com/$repository/releases/download/v$appVersion/$updateAssetName"
+if ($appVersion -notmatch '^\d+\.\d+\.\d+$') {
+    throw "app-version.json must contain version in the format 1.0.0"
+}
+
+if ($vendorVersion -notmatch '^\d+\.\d+\.\d+$') {
+    throw "app-version.json must contain vendorVersion in the format 1.0.0"
+}
+
+$updateAssetName = "update-only-$appVersion.zip"
+$vendorAssetName = "vendor-$vendorVersion-win-x64.zip"
+$fullAssetName = "CypherSR-$appVersion-win-x64.zip"
+
+# Both assets are published under this app release tag.
+# This script creates the vendor ZIP on every build, even when
+# vendorVersion has not changed. Upload it with the other assets.
+$releaseTag = "v$appVersion"
+$releaseBaseUrl = "https://github.com/$repository/releases/download/$releaseTag"
+
+$updateUrl = "$releaseBaseUrl/$updateAssetName"
+$vendorUrl = "$releaseBaseUrl/$vendorAssetName"
 
 foreach ($path in @(
     $publicSource,
@@ -54,6 +72,10 @@ foreach ($path in @(
     if (-not (Test-Path -LiteralPath $path)) {
         throw "Required build input not found: $path"
     }
+}
+
+if (-not (Test-Path -LiteralPath (Join-Path $publicSource "player.html") -PathType Leaf)) {
+    throw "Required overlay not found: $publicSource\player.html"
 }
 
 foreach ($commandName in @("node", "npx", "cargo")) {
@@ -70,12 +92,13 @@ $dataDirectory = Join-Path $release "data"
 New-Item -ItemType Directory -Force -Path $dataDirectory |
     Out-Null
 
-Write-Host "CypherSR version: $appVersion"
-Write-Host "Update asset:     $updateAssetName"
+Write-Host "CypherSR app version: $appVersion"
+Write-Host "Vendor version:       $vendorVersion"
+Write-Host "App update asset:     $updateAssetName"
+Write-Host "Vendor asset:         $vendorAssetName"
 
 # ------------------------------------------------------------
 # 2. Build the Node.js Single Executable Application
-#    This builds CypherSR-core.exe only.
 # ------------------------------------------------------------
 
 function Build-SeaExecutable {
@@ -164,7 +187,6 @@ function Build-SeaExecutable {
         throw "Build output was not created: $temporaryExe"
     }
 
-    # Close the app first if Windows locks the destination executable.
     Move-Item -LiteralPath $temporaryExe `
         -Destination $outputExe -Force
 
@@ -177,7 +199,6 @@ Build-SeaExecutable `
 
 # ------------------------------------------------------------
 # 3. Build the Rust launcher
-#    The icon is embedded by launcher-rust/build.rs.
 # ------------------------------------------------------------
 
 Write-Host ""
@@ -201,8 +222,7 @@ Copy-Item -LiteralPath $rustLauncher `
 Write-Host "Created $releaseLauncher"
 
 # ------------------------------------------------------------
-# 4. Copy runtime assets into release
-#    Preserve release\data.
+# 4. Copy application and vendor assets into release
 # ------------------------------------------------------------
 
 Write-Host ""
@@ -232,8 +252,19 @@ Copy-Item -LiteralPath $ytDlpSource `
 Copy-Item -LiteralPath $ffmpegSource `
     -Destination (Join-Path $releaseFfmpegDir "ffmpeg.exe") -Force
 
+# Record the installed vendor version inside the vendor directory.
+$vendorVersionJson = @{
+    version = $vendorVersion
+} | ConvertTo-Json
+
+[System.IO.File]::WriteAllText(
+    (Join-Path $releaseVendor $vendorVersionJsonName),
+    $vendorVersionJson,
+    [System.Text.UTF8Encoding]::new($false)
+)
+
 # ------------------------------------------------------------
-# 5. Write the installed version manifest
+# 5. Write the installed app version manifest
 # ------------------------------------------------------------
 
 $versionJson = @{
@@ -256,16 +287,21 @@ $versionJson = @{
 #   CypherSR/public/
 #   CypherSR/vendor/
 #
-# Update ZIP:
+# App update ZIP:
 #   CypherSR-core.exe
 #   version.json
 #   public/
-#   vendor/
 #
-# Neither ZIP contains data/.
+# Vendor ZIP:
+#   vendor/
+#     yt-dlp.exe
+#     ffmpeg/bin/ffmpeg.exe
+#     vendor-version.json
+#
+# No ZIP contains data/.
 # ------------------------------------------------------------
 
-function Copy-UpdatePayload {
+function Copy-AppUpdatePayload {
     param(
         [Parameter(Mandatory = $true)]
         [string]$Destination
@@ -282,9 +318,6 @@ function Copy-UpdatePayload {
 
     Copy-Item -LiteralPath (Join-Path $release "public") `
         -Destination $Destination -Recurse -Force
-
-    Copy-Item -LiteralPath (Join-Path $release "vendor") `
-        -Destination $Destination -Recurse -Force
 }
 
 function Compress-StageZip {
@@ -299,7 +332,6 @@ function Compress-StageZip {
     Remove-Item -LiteralPath $Destination `
         -Force -ErrorAction SilentlyContinue
 
-    # Archive the stage contents, not the stage directory itself.
     Compress-Archive `
         -Path (Join-Path $Stage "*") `
         -DestinationPath $Destination `
@@ -311,9 +343,10 @@ function Compress-StageZip {
 }
 
 $fullStage = Join-Path $packageRoot "full"
-$updateStage = Join-Path $packageRoot "update"
+$appUpdateStage = Join-Path $packageRoot "app-update"
+$vendorStage = Join-Path $packageRoot "vendor-update"
 
-foreach ($stage in @($fullStage, $updateStage)) {
+foreach ($stage in @($fullStage, $appUpdateStage, $vendorStage)) {
     Remove-Item -LiteralPath $stage `
         -Recurse -Force -ErrorAction SilentlyContinue
 
@@ -321,41 +354,54 @@ foreach ($stage in @($fullStage, $updateStage)) {
         Out-Null
 }
 
-# Build the complete portable package inside a CypherSR folder.
+# Full portable package is wrapped in a CypherSR directory.
 $fullAppStage = Join-Path $fullStage "CypherSR"
 
 New-Item -ItemType Directory -Path $fullAppStage -Force |
     Out-Null
 
-Copy-UpdatePayload -Destination $fullAppStage
+Copy-AppUpdatePayload -Destination $fullAppStage
 
 Copy-Item -LiteralPath (Join-Path $release $launcherName) `
     -Destination $fullAppStage -Force
 
-# Build the update package without the launcher or user data.
-Copy-UpdatePayload -Destination $updateStage
+Copy-Item -LiteralPath (Join-Path $release "vendor") `
+    -Destination $fullAppStage -Recurse -Force
 
-$fullZip = Join-Path $release "CypherSR-$appVersion-win-x64.zip"
+# App-only update: deliberately excludes vendor and launcher.
+Copy-AppUpdatePayload -Destination $appUpdateStage
+
+# Vendor update: archive contains a vendor/ directory at its root.
+Copy-Item -LiteralPath (Join-Path $release "vendor") `
+    -Destination $vendorStage -Recurse -Force
+
+$fullZip = Join-Path $release $fullAssetName
 $updateZip = Join-Path $release $updateAssetName
+$vendorZip = Join-Path $release $vendorAssetName
 
 Compress-StageZip -Stage $fullStage -Destination $fullZip
-Compress-StageZip -Stage $updateStage -Destination $updateZip
+Compress-StageZip -Stage $appUpdateStage -Destination $updateZip
+Compress-StageZip -Stage $vendorStage -Destination $vendorZip
 
 # ------------------------------------------------------------
-# 7. Generate latest.json
-#
-# Publish latest.json as a separate asset on the GitHub release.
-# The URL in this manifest points to the version-specific ZIP.
+# 7. Generate latest.json with independent app/vendor versions
 # ------------------------------------------------------------
 
-$sha256 = (
+$appSha256 = (
     Get-FileHash -LiteralPath $updateZip -Algorithm SHA256
+).Hash.ToLowerInvariant()
+
+$vendorSha256 = (
+    Get-FileHash -LiteralPath $vendorZip -Algorithm SHA256
 ).Hash.ToLowerInvariant()
 
 $manifest = @{
     version = $appVersion
     url = $updateUrl
-    sha256 = $sha256
+    sha256 = $appSha256
+    vendor = $vendorVersion
+    vendorUrl = $vendorUrl
+    vendorSha256 = $vendorSha256
 } | ConvertTo-Json
 
 $manifestPath = Join-Path $release "latest.json"
@@ -377,8 +423,10 @@ $requiredReleaseFiles = @(
     (Join-Path $release "public\player.html"),
     (Join-Path $release "vendor\yt-dlp.exe"),
     (Join-Path $release "vendor\ffmpeg\bin\ffmpeg.exe"),
+    (Join-Path $release "vendor\$vendorVersionJsonName"),
     $fullZip,
     $updateZip,
+    $vendorZip,
     $manifestPath
 )
 
@@ -391,22 +439,39 @@ foreach ($path in $requiredReleaseFiles) {
 $writtenManifest = Get-Content -LiteralPath $manifestPath -Raw |
     ConvertFrom-Json
 
-$expectedUpdateUrl = $updateUrl
-
-if ($writtenManifest.url -ne $expectedUpdateUrl) {
-    throw "Manifest URL does not match the expected version-specific update URL."
-}
-
 if ($writtenManifest.version -ne $appVersion) {
-    throw "Manifest version does not match app-version.json."
+    throw "Manifest app version does not match app-version.json."
 }
 
-if ($writtenManifest.sha256 -ne $sha256) {
-    throw "Manifest SHA-256 verification failed."
+if ($writtenManifest.url -ne $updateUrl) {
+    throw "Manifest app update URL is incorrect."
 }
 
-if ($writtenManifest.sha256 -notmatch '^[a-f0-9]{64}$') {
-    throw "Manifest SHA-256 is not a valid 64-character lowercase hexadecimal hash."
+if ($writtenManifest.sha256 -ne $appSha256 -or
+    $writtenManifest.sha256 -notmatch '^[a-f0-9]{64}$') {
+    throw "Manifest app update SHA-256 verification failed."
+}
+
+if ($writtenManifest.vendor -ne $vendorVersion) {
+    throw "Manifest vendor version does not match app-version.json."
+}
+
+if ($writtenManifest.vendorUrl -ne $vendorUrl) {
+    throw "Manifest vendor URL is incorrect."
+}
+
+if ($writtenManifest.vendorSha256 -ne $vendorSha256 -or
+    $writtenManifest.vendorSha256 -notmatch '^[a-f0-9]{64}$') {
+    throw "Manifest vendor SHA-256 verification failed."
+}
+
+# Verify that the generated vendor version marker matches the config.
+$writtenVendorVersion = Get-Content -LiteralPath `
+    (Join-Path $release "vendor\$vendorVersionJsonName") -Raw |
+    ConvertFrom-Json
+
+if ($writtenVendorVersion.version -ne $vendorVersion) {
+    throw "Vendor version marker does not match app-version.json."
 }
 
 # ------------------------------------------------------------
@@ -417,20 +482,25 @@ Write-Host ""
 Write-Host "============================================"
 Write-Host "CypherSR build completed successfully"
 Write-Host "============================================"
-Write-Host "App version: $appVersion"
+Write-Host "App version:       $appVersion"
+Write-Host "Vendor version:    $vendorVersion"
 Write-Host ""
-Write-Host "Launcher:    $releaseLauncher"
-Write-Host "Core:        $(Join-Path $release $coreName)"
-Write-Host "Full ZIP:    $fullZip"
-Write-Host "Update ZIP:  $updateZip"
-Write-Host "Manifest:    $manifestPath"
+Write-Host "Launcher:          $releaseLauncher"
+Write-Host "Core:              $(Join-Path $release $coreName)"
+Write-Host "Full ZIP:          $fullZip"
+Write-Host "App update ZIP:    $updateZip"
+Write-Host "Vendor update ZIP: $vendorZip"
+Write-Host "Manifest:          $manifestPath"
 Write-Host ""
-Write-Host "Update URL:  $updateUrl"
-Write-Host "SHA-256:     $sha256"
+Write-Host "App update URL:    $updateUrl"
+Write-Host "App SHA-256:       $appSha256"
 Write-Host ""
-Write-Host "The Rust launcher is built with Cargo."
-Write-Host "The update ZIP excludes the launcher and user data."
-Write-Host "latest.json is a separate GitHub release asset."
+Write-Host "Vendor update URL: $vendorUrl"
+Write-Host "Vendor SHA-256:    $vendorSha256"
+Write-Host ""
+Write-Host "Upload all three ZIPs and latest.json to release $releaseTag."
+Write-Host "App updates exclude vendor files and the launcher."
+Write-Host "Vendor updates are packaged separately."
 Write-Host "Existing release\data was preserved."
 Write-Host "Neither ZIP contains the data folder."
 Write-Host "============================================"
