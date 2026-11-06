@@ -17,10 +17,12 @@ type AppResult<T> = Result<T, Box<dyn Error>>;
 
 const REPOSITORY: &str = "Cypherusuh/CypherSR";
 
-const CORE_EXE: &str = "CypherSR-core.exe";
+const CORE_EXE: &str = "CypherSR-Core.exe";
 const VERSION_FILE: &str = "version.json";
 const VENDOR_DIR: &str = "vendor";
 const VENDOR_VERSION_FILE: &str = "vendor-version.json";
+const SONG_REQUEST_RUNTIME_HOME_ENV: &str = "SONG_REQUEST_RUNTIME_HOME";
+const SONG_REQUEST_HOME_ENV: &str = "SONG_REQUEST_HOME";
 
 const UPDATE_TIMEOUT_SECS: u64 = 900;
 const MANIFEST_TIMEOUT_SECS: u64 = 30;
@@ -82,6 +84,7 @@ struct UpdateSpec {
 
 struct AppPaths {
     root: PathBuf,
+    executable_dir: PathBuf,
     data: PathBuf,
     temp: PathBuf,
     staging: PathBuf,
@@ -92,21 +95,38 @@ struct AppPaths {
 impl AppPaths {
     fn new() -> AppResult<Self> {
         let executable = env::current_exe()?;
-        let root = executable
+        let executable_dir = executable
             .parent()
             .ok_or("Cannot determine launcher directory")?
             .to_path_buf();
+        let root = env::var_os(SONG_REQUEST_RUNTIME_HOME_ENV)
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| executable_dir.clone());
+        let data = env::var_os(SONG_REQUEST_HOME_ENV)
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| root.join("data"));
 
         let temp = root.join(".tmp");
 
         Ok(Self {
-            data: root.join("data"),
+            data,
+            executable_dir,
             staging: temp.join("staging"),
             backup: temp.join("backup"),
             journal: temp.join("update-state.json"),
             temp,
             root,
         })
+    }
+}
+
+fn installed_path(paths: &AppPaths, name: &str) -> PathBuf {
+    if name == CORE_EXE {
+        paths.executable_dir.join(name)
+    } else {
+        paths.root.join(name)
     }
 }
 
@@ -221,7 +241,11 @@ fn validate_local_test_url(url: &str) -> AppResult<()> {
     Ok(())
 }
 
-fn validate_release_asset_url(url: &str, expected_asset: &str) -> AppResult<()> {
+fn validate_release_asset_url(
+    url: &str,
+    expected_asset: &str,
+    backend_version: &str,
+) -> AppResult<()> {
     let parsed = Url::parse(url)?;
 
     if parsed.scheme() != "https"
@@ -248,14 +272,12 @@ fn validate_release_asset_url(url: &str, expected_asset: &str) -> AppResult<()> 
         return Err("Unexpected release asset URL path".into());
     }
 
-    // Releases now use Desktop-version tags, independently of the
-    // backend or vendor version contained in the asset filename.
-    let desktop_tag_version = parts[0]
-        .strip_prefix("desktop-v")
-        .ok_or("Release tag must begin with desktop-v")?;
-
-    if !valid_version(desktop_tag_version) {
-        return Err("Invalid Desktop version in release tag".into());
+    let backend_tag = format!("v{backend_version}");
+    let desktop_tag_version = parts[0].strip_prefix("desktop-v");
+    if parts[0] != backend_tag
+        && !desktop_tag_version.is_some_and(valid_version)
+    {
+        return Err("Invalid release tag for update asset".into());
     }
 
     if parts[1] != expected_asset {
@@ -272,17 +294,21 @@ fn validate_app_url(url: &str, version: &str) -> AppResult<()> {
 
     let expected_asset = format!("CypherSR-Backend-Update-v{version}-win-x64.zip");
 
-    validate_release_asset_url(url, &expected_asset)
+    validate_release_asset_url(url, &expected_asset, version)
 }
 
-fn validate_vendor_url(url: &str, vendor_version: &str) -> AppResult<()> {
+fn validate_vendor_url(
+    url: &str,
+    vendor_version: &str,
+    backend_version: &str,
+) -> AppResult<()> {
     if is_test_mode() {
         return validate_local_test_url(url);
     }
 
     let expected_asset = format!("vendor-{vendor_version}-win-x64.zip");
 
-    validate_release_asset_url(url, &expected_asset)
+    validate_release_asset_url(url, &expected_asset, backend_version)
 }
 
 fn client(timeout: Duration) -> AppResult<Client> {
@@ -341,7 +367,7 @@ fn fetch_manifest() -> AppResult<UpdateManifest> {
                 return Err("Invalid vendor SHA-256 checksum in latest.json".into());
             }
 
-            validate_vendor_url(url, version)?;
+            validate_vendor_url(url, version, &manifest.version)?;
         }
         (None, None, None) => {
             // A manifest may intentionally publish app updates only.
@@ -663,7 +689,7 @@ fn restore_backup(paths: &AppPaths, state: &UpdateState) -> AppResult<()> {
     log("Recovering the previous installation...");
 
     for name in state.targets.iter().rev() {
-        let destination = paths.root.join(name);
+        let destination = installed_path(paths, name);
         let backup = paths.backup.join(name);
 
         let had_original = *state
@@ -723,7 +749,7 @@ fn install_update(paths: &AppPaths, spec: &UpdateSpec, zip_path: &Path) -> AppRe
 
     // Back up every target before changing the installed files.
     for name in targets {
-        let destination = paths.root.join(name);
+        let destination = installed_path(paths, name);
         let backup = paths.backup.join(name);
         let existed = fs::symlink_metadata(&destination).is_ok();
 
@@ -745,7 +771,7 @@ fn install_update(paths: &AppPaths, spec: &UpdateSpec, zip_path: &Path) -> AppRe
 
     let installation_result = (|| -> AppResult<()> {
         for name in targets {
-            let destination = paths.root.join(name);
+            let destination = installed_path(paths, name);
             let staged = paths.staging.join(name);
 
             remove_path(&destination)?;
@@ -860,7 +886,7 @@ fn check_and_apply_updates(paths: &AppPaths) -> AppResult<()> {
 }
 
 fn start_application(paths: &AppPaths) -> AppResult<ExitStatus> {
-    let core_path = paths.root.join(CORE_EXE);
+    let core_path = paths.executable_dir.join(CORE_EXE);
 
     if !core_path.is_file() {
         return Err(format!(
@@ -877,7 +903,8 @@ fn start_application(paths: &AppPaths) -> AppResult<ExitStatus> {
     let mut command = Command::new(core_path);
     command
         .current_dir(&paths.root)
-        .env("SONG_REQUEST_HOME", &paths.data);
+        .env(SONG_REQUEST_HOME_ENV, &paths.data)
+        .env(SONG_REQUEST_RUNTIME_HOME_ENV, &paths.root);
 
     // Inherit stdout/stderr so the console displays core output.
     let mut child = command.spawn()?;
@@ -886,6 +913,66 @@ fn start_application(paths: &AppPaths) -> AppResult<ExitStatus> {
     log(&format!("App exited with status {status}."));
 
     Ok(status)
+}
+
+fn register_mpv_if_needed(paths: &AppPaths) -> AppResult<()> {
+    let mpv_dir = paths.root.join(VENDOR_DIR).join("mpv");
+    let mpv_executable = mpv_dir.join("mpv.exe");
+    let register_script = mpv_dir.join("mpv-register.bat");
+
+    if !mpv_executable.exists() && !register_script.exists() {
+        return Ok(());
+    }
+
+    for path in [&mpv_executable, &register_script] {
+        if !path.is_file() {
+            return Err(format!("Bundled MPV file was not found: {}", path.display()).into());
+        }
+    }
+
+    fs::create_dir_all(&paths.data)?;
+    let marker = paths.data.join("mpv-registration-path.txt");
+    let mpv_path = mpv_executable.to_string_lossy();
+    let previous_registration = match fs::read_to_string(&marker) {
+        Ok(path) => Some(path),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error.into()),
+    };
+
+    if previous_registration
+        .as_deref()
+        .map(str::trim)
+        .is_some_and(|path| path.eq_ignore_ascii_case(&mpv_path))
+    {
+        return Ok(());
+    }
+
+    let output = Command::new("cmd.exe")
+        .args(["/D", "/C"])
+        .arg(&register_script)
+        .current_dir(&mpv_dir)
+        .output()?;
+
+    if !output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let details = [stdout.trim(), stderr.trim()]
+            .into_iter()
+            .filter(|text| !text.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        return Err(format!(
+            "MPV registration script exited with {}.\n{}",
+            output.status, details
+        )
+        .into());
+    }
+
+    fs::write(&marker, mpv_path.as_bytes())?;
+    log(&format!("Registered bundled MPV at {}", mpv_executable.display()));
+
+    Ok(())
 }
 
 fn run() -> AppResult<()> {
@@ -927,6 +1014,7 @@ fn run() -> AppResult<()> {
         fs::remove_dir_all(&paths.temp)?;
     }
 
+    register_mpv_if_needed(&paths)?;
     start_application(&paths)?;
 
     Ok(())
@@ -937,5 +1025,42 @@ fn main() {
         eprintln!("[CypherSR] Fatal error: {}", error_message(error.as_ref()));
 
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn release_asset_url_accepts_backend_and_desktop_tags() {
+        let asset = "CypherSR-Backend-Update-v1.2.0-win-x64.zip";
+
+        assert!(
+            validate_release_asset_url(
+                &format!("https://github.com/{REPOSITORY}/releases/download/v1.2.0/{asset}"),
+                asset,
+                "1.2.0",
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_release_asset_url(
+                &format!(
+                    "https://github.com/{REPOSITORY}/releases/download/desktop-v1.0.2/{asset}"
+                ),
+                asset,
+                "1.2.0",
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_release_asset_url(
+                &format!("https://github.com/{REPOSITORY}/releases/download/v1.0.2/{asset}"),
+                asset,
+                "1.2.0",
+            )
+            .is_err()
+        );
     }
 }

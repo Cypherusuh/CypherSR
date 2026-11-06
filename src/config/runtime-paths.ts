@@ -2,9 +2,13 @@
 import { dirname, isAbsolute, resolve } from 'node:path';
 import { isSea } from 'node:sea';
 
+const configuredRuntimeHome = process.env.SONG_REQUEST_RUNTIME_HOME?.trim();
+
 function getAppDirectory(): string {
   if (isSea()) {
-    return dirname(process.execPath);
+    return configuredRuntimeHome
+      ? resolve(configuredRuntimeHome)
+      : dirname(process.execPath);
   }
 
   // Development builds are launched from the project root.

@@ -25,10 +25,20 @@ Download the latest version from the [Releases page](https://github.com/Cypherus
 
 1. Download the latest full portable ZIP from the [latest release](https://github.com/Cypherusuh/CypherSR/releases/latest).
 2. Extract the ZIP into a writable folder.
-3. Run `CypherSR.exe`. The Rust launcher checks for app and bundled media-tool updates, then starts `CypherSR-core.exe`. On first run, follow the Twitch login instructions.
+3. Run `Cypher-Updater.exe`. The Rust launcher checks for app and bundled media-tool updates, then starts `CypherSR-Core.exe`. On first run, follow the Twitch login instructions.
 4. Add the printed browser source URLs to OBS.
 
-Keep `CypherSR.exe`, `CypherSR-core.exe`, `public/`, and `vendor/` together, and launch the app with `CypherSR.exe` to receive updates. If an update check fails, the launcher reports the error and tries to start the installed version. Do not delete the `data/` folder; it stores your configuration, authentication, and cached media.
+For the standalone LITE package, keep `Cypher-Updater.exe`,
+`CypherSR-Core.exe`, `public/`, and `vendor/` together, and launch the app with
+`Cypher-Updater.exe` to receive updates. If an update check fails, the launcher
+reports the error and tries to start the installed version.
+
+The FULL desktop package keeps the updater, core, `public/`, and `vendor/`
+together inside `backend/`. Its launcher sets `SONG_REQUEST_RUNTIME_HOME` to
+that directory so the backend resolves assets and update files beside its
+binaries. Persistent `data/` remains beside the desktop executable and is
+passed through `SONG_REQUEST_HOME`. Do not delete `data/`; it stores backend
+configuration, authentication, and cached media.
 
 ## Commands
 

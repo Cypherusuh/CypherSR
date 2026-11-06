@@ -12,14 +12,20 @@ $versionFile = Join-Path $root "app-version.json"
 $publicSource = Join-Path $root "public"
 $ytDlpSource = Join-Path $root "vendor\yt-dlp.exe"
 $ffmpegSource = Join-Path $root "vendor\ffmpeg\bin\ffmpeg.exe"
+$defaultMpvSource = Join-Path (Split-Path -Parent $root) "CypherSR-desktop\resources\mpv"
+$mpvSource = if ($env:CYPHERSR_MPV_SOURCE) {
+    $env:CYPHERSR_MPV_SOURCE
+} else {
+    $defaultMpvSource
+}
 
 $cargoManifest = Join-Path $root "launcher-rust\Cargo.toml"
 $rustLauncher = Join-Path $root "launcher-rust\target\release\CypherSR.exe"
 
 $repository = "Cypherusuh/CypherSR"
 
-$launcherName = "CypherSR.exe"
-$coreName = "CypherSR-core.exe"
+$launcherName = "Cypher-Updater.exe"
+$coreName = "CypherSR-Core.exe"
 $versionJsonName = "version.json"
 $vendorVersionJsonName = "vendor-version.json"
 
@@ -74,6 +80,8 @@ foreach ($path in @(
     $publicSource,
     $ytDlpSource,
     $ffmpegSource,
+    (Join-Path $mpvSource "mpv.exe"),
+    (Join-Path $mpvSource "mpv-register.bat"),
     $cargoManifest
 )) {
     if (-not (Test-Path -LiteralPath $path)) {
@@ -239,7 +247,6 @@ Write-Host "Copying application assets..."
 
 $releasePublic = Join-Path $release "public"
 $releaseVendor = Join-Path $release "vendor"
-
 Remove-Item -LiteralPath @(
     $releasePublic,
     $releaseVendor
@@ -260,6 +267,9 @@ Copy-Item -LiteralPath $ytDlpSource `
 
 Copy-Item -LiteralPath $ffmpegSource `
     -Destination (Join-Path $releaseFfmpegDir "ffmpeg.exe") -Force
+
+Copy-Item -LiteralPath $mpvSource `
+    -Destination $releaseVendor -Recurse -Force
 
 # Record the installed vendor version inside the vendor directory.
 $vendorVersionJson = @{
@@ -291,14 +301,14 @@ $versionJson = @{
 #
 # Full ZIP:
 #   CypherSR/
-#     CypherSR.exe
-#     CypherSR-core.exe
+#     Cypher-Updater.exe
+#     CypherSR-Core.exe
 #     version.json
 #     public/
 #     vendor/
 #
 # Backend update ZIP:
-#   CypherSR-core.exe
+#   CypherSR-Core.exe
 #   version.json
 #   public/
 #
@@ -306,6 +316,7 @@ $versionJson = @{
 #   vendor/
 #     yt-dlp.exe
 #     ffmpeg/bin/ffmpeg.exe
+#     mpv/
 #     vendor-version.json
 #
 # No ZIP contains data/.
@@ -437,6 +448,8 @@ $requiredReleaseFiles = @(
     (Join-Path $release "public\player.html"),
     (Join-Path $release "vendor\yt-dlp.exe"),
     (Join-Path $release "vendor\ffmpeg\bin\ffmpeg.exe"),
+    (Join-Path $release "vendor\mpv\mpv.exe"),
+    (Join-Path $release "vendor\mpv\mpv-register.bat"),
     (Join-Path $release "vendor\$vendorVersionJsonName"),
     $fullZip,
     $updateZip,
