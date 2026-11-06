@@ -1,10 +1,11 @@
-$DesktopRoot = "D:\Work\Portfolio\CypherSR-desktop"
-$BackendRoot = "D:\Work\Portfolio\CypherSR-lite"
-$OutputRoot = "D:\Work\Portfolio\CypherSR"
 $ErrorActionPreference = "Stop"
 
+$RepositoryRoot = Split-Path -Parent $PSScriptRoot
+$DesktopRoot = Join-Path $RepositoryRoot "desktop"
+$OutputRoot = $RepositoryRoot
+
 $DesktopExeName = "CypherSR-Desktop.exe"
-$PatcherExeName = "Cypher-Updater.exe"
+$PatcherExeName = "CypherSR-Updater.exe"
 $CoreExeName = "CypherSR-Core.exe"
 $BackendDirectoryName = "backend"
 $MpvDirectoryName = "mpv"
@@ -53,33 +54,21 @@ function Get-UrlFilename {
 function Get-DesktopVersion {
     param(
         [Parameter(Mandatory = $true)]
-        [string]$ManifestPath
+        [string]$VersionPath
     )
 
-    $manifestText = Get-Content -LiteralPath $ManifestPath -Raw
-
-    $packageMatch = [regex]::Match(
-        $manifestText,
-        '(?ms)^\[package\]\s*(.*?)(?=^\[|\z)'
-    )
-
-    if (-not $packageMatch.Success) {
-        throw "Could not find [package] in $ManifestPath."
+    try {
+        $versionConfig = Get-Content -LiteralPath $VersionPath -Raw |
+            ConvertFrom-Json
+    }
+    catch {
+        throw "Failed to parse app-version.json: $($_.Exception.Message)"
     }
 
-    $versionMatch = [regex]::Match(
-        $packageMatch.Groups[1].Value,
-        '(?m)^\s*version\s*=\s*"([^"]+)"'
-    )
-
-    if (-not $versionMatch.Success) {
-        throw "Could not read package.version from $ManifestPath."
-    }
-
-    $version = $versionMatch.Groups[1].Value.Trim()
+    $version = [string]$versionConfig.version
 
     if ($version -notmatch '^\d+\.\d+\.\d+$') {
-        throw "Desktop version '$version' must use x.y.z format."
+        throw "app-version.json must contain version in the format 1.0.0"
     }
 
     return $version
@@ -149,24 +138,30 @@ function Get-Sha256 {
 # ---------------------------------------------------------------------------
 
 $cargoManifest = Join-Path $DesktopRoot "Cargo.toml"
-$desktopRelease = Join-Path $DesktopRoot "release"
-$desktopVersion = Get-DesktopVersion -ManifestPath $cargoManifest
+$versionFile = Join-Path $RepositoryRoot "app-version.json"
+$desktopVersion = Get-DesktopVersion -VersionPath $versionFile
+$releaseRoot = Join-Path $RepositoryRoot "release"
+$versionPublishDir = Join-Path $releaseRoot "v$desktopVersion"
+$versioningDir = Join-Path $versionPublishDir "versioning"
+$publishedAppDir = Join-Path $versionPublishDir "Published App"
+$publishingZipDir = Join-Path $versionPublishDir "Publishing zip"
+$backendRelease = Join-Path $versionPublishDir "Backend Build"
+$desktopRelease = Join-Path $versionPublishDir "Desktop Build"
 
-$desktopExe = Join-Path $DesktopRoot "target\release\$DesktopExeName"
+$desktopExe = Join-Path $desktopRelease $DesktopExeName
 $desktopConfig = Join-Path $DesktopRoot "config.toml"
-$mpvSource = Join-Path $DesktopRoot "resources\mpv"
 $desktopGuiZipName = "CypherSR-Desktop-GUI-v$desktopVersion-win-x64.zip"
-$desktopGuiZipSource = Join-Path $desktopRelease $desktopGuiZipName
+$desktopGuiZipSource = Join-Path $publishingZipDir $desktopGuiZipName
 $desktopUpdateAssetName = "CypherSR-Desktop-GUI-v$desktopVersion-win-x64.exe"
 
-$backendRelease = Join-Path $BackendRoot "release"
-$backendConfigPath = Join-Path $BackendRoot "app-version.json"
+$backendConfigPath = $versionFile
 $backendManifestPath = Join-Path $backendRelease "latest.json"
 
 $backendPatcher = Join-Path $backendRelease $PatcherExeName
 $backendCore = Join-Path $backendRelease $CoreExeName
 $backendPublic = Join-Path $backendRelease "public"
 $backendVendor = Join-Path $backendRelease "vendor"
+$mpvSource = Join-Path $backendVendor $MpvDirectoryName
 
 foreach ($item in @(
     @{ Path = $cargoManifest; Description = "Desktop Cargo.toml" },
@@ -177,6 +172,9 @@ foreach ($item in @(
     @{ Path = $desktopGuiZipSource; Description = "Versioned Desktop GUI ZIP" },
     @{ Path = $backendConfigPath; Description = "Backend app-version.json" },
     @{ Path = $backendManifestPath; Description = "Backend latest.json" },
+    @{ Path = (Join-Path $versioningDir "desktop.json"); Description = "Desktop version metadata" },
+    @{ Path = (Join-Path $versioningDir "backend.json"); Description = "Backend version metadata" },
+    @{ Path = (Join-Path $versioningDir "vendor.json"); Description = "Vendor version metadata" },
     @{ Path = $backendPatcher; Description = "Built backend patcher" },
     @{ Path = $backendCore; Description = "Built backend core" },
     @{ Path = (Join-Path $backendPublic "player.html"); Description = "Backend public\player.html" },
@@ -201,10 +199,33 @@ if ($vendorVersion -notmatch '^\d+\.\d+\.\d+$') {
     throw "Backend app-version.json has an invalid vendorVersion."
 }
 
+if ($backendVersion -ne $desktopVersion) {
+    throw "Desktop and backend versions must match the root app-version.json."
+}
+
+$desktopVersionMetadata = Get-Content -LiteralPath `
+    (Join-Path $versioningDir "desktop.json") -Raw | ConvertFrom-Json
+$backendVersionMetadata = Get-Content -LiteralPath `
+    (Join-Path $versioningDir "backend.json") -Raw | ConvertFrom-Json
+$vendorVersionMetadata = Get-Content -LiteralPath `
+    (Join-Path $versioningDir "vendor.json") -Raw | ConvertFrom-Json
+
+if ([string]$desktopVersionMetadata.version -ne $desktopVersion) {
+    throw "Desktop version metadata does not match app-version.json."
+}
+
+if ([string]$backendVersionMetadata.version -ne $backendVersion) {
+    throw "Backend version metadata does not match app-version.json."
+}
+
+if ([string]$vendorVersionMetadata.version -ne $vendorVersion) {
+    throw "Vendor version metadata does not match app-version.json."
+}
+
 # The Lite ZIP uses the backend version, so define it only after reading
 # and validating app-version.json.
 $liteZipName = "CypherSR-Lite-v$backendVersion-win-x64.zip"
-$liteZipSource = Join-Path $backendRelease $liteZipName
+$liteZipSource = Join-Path $publishingZipDir $liteZipName
 
 Require-Path -Path $liteZipSource -Description "Backend Lite ZIP"
 
@@ -263,7 +284,7 @@ $vendorUrlProperty = Find-ManifestZipProperty `
 $backendUpdateSourceName = Get-UrlFilename -Url $backendUpdateUrlProperty.Value
 
 $backendUpdateSource = Find-SourceZip `
-    -BackendRelease $backendRelease `
+    -BackendRelease $publishingZipDir `
     -Filename $backendUpdateSourceName `
     -Description "Backend update ZIP"
 
@@ -271,20 +292,18 @@ $backendUpdateSource = Find-SourceZip `
 # 2. Define output layout and asset names.
 # ---------------------------------------------------------------------------
 
-$productDir = Join-Path $OutputRoot $desktopVersion
-$publishDir = Join-Path $OutputRoot "release"
-$versionPublishDir = Join-Path $publishDir $desktopVersion
+$productDir = Join-Path $publishedAppDir $FullFolderName
+$publishDir = $publishingZipDir
 $stageDir = Join-Path $OutputRoot ".staging-$desktopVersion"
 
 $fullZipName = "CypherSR-Full-v$desktopVersion-win-x64.zip"
 $backendUpdateName = "CypherSR-Backend-Update-v$backendVersion-win-x64.zip"
 $vendorZipName = "vendor-$vendorVersion-win-x64.zip"
 
-$fullZipPath = Join-Path $versionPublishDir $fullZipName
-$desktopGuiZipPath = Join-Path $versionPublishDir $desktopGuiZipName
-$backendUpdatePath = Join-Path $versionPublishDir $backendUpdateName
-$vendorZipPath = Join-Path $versionPublishDir $vendorZipName
-$liteZipPath = Join-Path $versionPublishDir $liteZipName
+$fullZipPath = Join-Path $publishingZipDir $fullZipName
+$backendUpdatePath = Join-Path $publishingZipDir $backendUpdateName
+$vendorZipPath = Join-Path $publishingZipDir $vendorZipName
+$liteZipPath = Join-Path $publishingZipDir $liteZipName
 
 # Desktop tags are distinct from backend v<version> tags.
 $releaseTag = "desktop-v$desktopVersion"
@@ -304,7 +323,10 @@ Write-Host "Desktop version: $desktopVersion"
 Write-Host "Backend version: $backendVersion"
 Write-Host "Vendor version:  $vendorVersion"
 Write-Host "Product folder:  $productDir"
-Write-Host "Release folder:  $versionPublishDir"
+Write-Host "Published app:   $publishedAppDir"
+Write-Host "Publishing ZIPs: $publishingZipDir"
+Write-Host "Backend build:   $backendRelease"
+Write-Host "Desktop build:   $desktopRelease"
 Write-Host "GitHub tag:      $releaseTag"
 Write-Host ""
 
@@ -349,6 +371,7 @@ New-Item -ItemType Directory -Path $productBackend -Force | Out-Null
 
 foreach ($fileName in @(
     $PatcherExeName,
+    "Cypher-Updater.exe",
     $CoreExeName,
     "CypherSR.exe",
     "CypherSR-core.exe"
@@ -368,6 +391,7 @@ Copy-Item -LiteralPath $backendCore `
 
 foreach ($fileName in @(
     $PatcherExeName,
+    "Cypher-Updater.exe",
     $CoreExeName,
     "CypherSR.exe",
     "CypherSR-core.exe"
@@ -420,32 +444,33 @@ Copy-Item -LiteralPath $productBackend `
 # ---------------------------------------------------------------------------
 # 5. Rebuild publishing assets.
 #
-# release\latest.json stays at the root.
-# Downloadable release assets live under release\<DesktopVersion>\.
+# Runnable files and release artifacts are separated into their own folders.
+# latest.json and distributable ZIPs live under "Publishing zip".
 # ---------------------------------------------------------------------------
 
-Remove-Item -LiteralPath $publishDir `
-    -Recurse -Force -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Path @(
+    $publishedAppDir,
+    $publishingZipDir,
+    $backendRelease,
+    $desktopRelease,
+    $versioningDir
+) -Force | Out-Null
 
-New-Item -ItemType Directory -Path $versionPublishDir -Force | Out-Null
-
-# Keep the ZIP for manual downloads and publish the executable separately for
-# the in-app updater, which verifies and replaces the running desktop EXE.
-Copy-Item -LiteralPath $desktopGuiZipSource `
-    -Destination $desktopGuiZipPath -Force
+# Publish the executable separately for the in-app updater.
 Copy-Item -LiteralPath $desktopExe `
-    -Destination (Join-Path $versionPublishDir $desktopUpdateAssetName) -Force
+    -Destination (Join-Path $desktopRelease $desktopUpdateAssetName) -Force
 Require-Path `
-    -Path (Join-Path $versionPublishDir $desktopUpdateAssetName) `
+    -Path (Join-Path $desktopRelease $desktopUpdateAssetName) `
     -Description "Desktop updater executable asset"
 
 # Rename the backend updater ZIP without changing its contents.
-Copy-Item -LiteralPath $backendUpdateSource `
-    -Destination $backendUpdatePath -Force
+if ([IO.Path]::GetFullPath($backendUpdateSource) -ne [IO.Path]::GetFullPath($backendUpdatePath)) {
+    Copy-Item -LiteralPath $backendUpdateSource -Destination $backendUpdatePath -Force
+}
 
 $vendorStageRoot = Join-Path $stageDir "vendor-package"
 $vendorStageDir = Join-Path $vendorStageRoot "vendor"
-$vendorZipTempPath = Join-Path $versionPublishDir ".tmp-$vendorZipName"
+$vendorZipTempPath = Join-Path $publishingZipDir ".tmp-$vendorZipName"
 
 New-Item -ItemType Directory -Path $vendorStageRoot -Force | Out-Null
 Copy-Item -LiteralPath $productVendor `
@@ -474,13 +499,16 @@ finally {
 }
 
 # Copy the standalone Lite package byte-for-byte.
-Copy-Item -LiteralPath $liteZipSource `
-    -Destination $liteZipPath -Force
+if ([IO.Path]::GetFullPath($liteZipSource) -ne
+    [IO.Path]::GetFullPath($liteZipPath)) {
+    Copy-Item -LiteralPath $liteZipSource `
+        -Destination $liteZipPath -Force
+}
 
 # Create the full portable package.
 # The temporary filename still ends with .zip for Compress-Archive.
 # Create the full portable package with a parent folder.
-$fullZipTempPath = Join-Path $versionPublishDir ".tmp-$fullZipName"
+$fullZipTempPath = Join-Path $publishingZipDir ".tmp-$fullZipName"
 $fullStageRoot = Join-Path $stageDir $FullFolderName
 
 try {
@@ -530,7 +558,7 @@ Require-Path -Path (Join-Path $productMpv "mpv-register.bat") -Description "Pack
 # ---------------------------------------------------------------------------
 
 $desktopUpdateHash = Get-Sha256 `
-    -Path (Join-Path $versionPublishDir $desktopUpdateAssetName)
+    -Path (Join-Path $desktopRelease $desktopUpdateAssetName)
 $backendUpdateHash = Get-Sha256 -Path $backendUpdatePath
 $vendorHash = Get-Sha256 -Path $vendorZipPath
 $fullHash = Get-Sha256 -Path $fullZipPath
@@ -603,10 +631,6 @@ $manifestOutput = Join-Path $publishDir "latest.json"
 $manifestJson = $backendManifest | ConvertTo-Json -Depth 20
 
 Write-Utf8NoBom -Path $manifestOutput -Content $manifestJson
-
-# Keep the backend repository manifest synchronized with the merged manifest.
-Copy-Item -LiteralPath $manifestOutput `
-    -Destination $backendManifestPath -Force
 
 # ---------------------------------------------------------------------------
 # 7. Validate generated files and archive contents.
@@ -738,8 +762,11 @@ Write-Host "============================================"
 Write-Host "Packaging completed successfully"
 Write-Host "============================================"
 Write-Host "Runnable product: $productDir"
-Write-Host "Release assets:   $versionPublishDir"
-Write-Host "Root manifest:    $manifestOutput"
+Write-Host "Published app:    $publishedAppDir"
+Write-Host "Publishing ZIPs:  $publishingZipDir"
+Write-Host "Backend build:    $backendRelease"
+Write-Host "Desktop build:    $desktopRelease"
+Write-Host "Manifest:         $manifestOutput"
 Write-Host "Backend manifest: $backendManifestPath"
 Write-Host ""
 Write-Host "Full release:     $fullZipName"

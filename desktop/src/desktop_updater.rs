@@ -74,7 +74,7 @@ struct DesktopUpdateManifest {
 /// should exit so the external updater can replace the
 /// running executable.
 pub fn check_and_apply_update() -> bool {
-    let current_version = env!("CARGO_PKG_VERSION");
+    let current_version = env!("CYPHERSR_APP_VERSION");
 
     let client = match Client::builder()
         .connect_timeout(Duration::from_secs(15))

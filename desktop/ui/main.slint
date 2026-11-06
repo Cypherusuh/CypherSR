@@ -38,7 +38,7 @@ export component MainWindow inherits Window {
     // Playback state reported by the backend from mpv.
     in-out property <float> playback-position: 0;
     in-out property <float> playback-duration: 0;
-    in-out property <float> playback-volume: 1;
+    in-out property <float> playback-volume: 0.4;
     in-out property <bool> playback-paused: true;
 
     callback seek-requested(float);

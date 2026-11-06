@@ -10,7 +10,7 @@ export class PlayerState {
         requestId: null,
         position: 0,
         duration: 0,
-        volume: 1,
+        volume: 0.4,
         paused: true,
         updatedAt: Date.now(),
     };
@@ -235,6 +235,14 @@ export class PlayerState {
             action,
             ...(typeof value === 'number' ? { value } : {}),
         };
+
+        if (action === 'volume' && typeof value === 'number') {
+            this.runtime = {
+                ...this.runtime,
+                volume: value,
+                updatedAt: Date.now(),
+            };
+        }
 
         this.pendingControl = control;
 

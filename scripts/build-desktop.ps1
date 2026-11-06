@@ -3,14 +3,16 @@ $ErrorActionPreference = "Stop"
 
 # CypherSR Desktop frontend build.
 # Compiles the Rust/Slint GUI and creates a versioned ZIP release asset.
-# The version is read automatically from Cargo.toml.
+# The version is read from the repository root app-version.json.
 # The ZIP contains only CypherSR-Desktop.exe.
 # Project root is detected relative to this script.
 
 $FrontendRoot = Split-Path -Parent $PSScriptRoot
-$CargoManifest = Join-Path $FrontendRoot "Cargo.toml"
-$ReleaseDir = Join-Path $FrontendRoot "target\release"
-$DistDir = Join-Path $FrontendRoot "release"
+$DesktopRoot = Join-Path $FrontendRoot "desktop"
+$VersionFile = Join-Path $FrontendRoot "app-version.json"
+$CargoManifest = Join-Path $DesktopRoot "Cargo.toml"
+$ReleaseDir = Join-Path $DesktopRoot "target\release"
+$ReleaseRoot = Join-Path $FrontendRoot "release"
 
 function Require-Path {
     param(
@@ -25,45 +27,33 @@ function Require-Path {
     }
 }
 
-function Get-DesktopVersion {
+function Get-AppVersion {
     param(
         [Parameter(Mandatory = $true)]
-        [string]$ManifestPath
+        [string]$VersionPath
     )
 
-    $manifest = Get-Content -LiteralPath $ManifestPath -Raw
-
-    # Read package.version from the [package] section only.
-    $packageMatch = [regex]::Match(
-        $manifest,
-        '(?ms)^\[package\]\s*(.*?)(?=^\[|\z)'
-    )
-
-    if (-not $packageMatch.Success) {
-        throw "Could not find the [package] section in $ManifestPath."
+    try {
+        $versionConfig = Get-Content -LiteralPath $VersionPath -Raw |
+            ConvertFrom-Json
+    }
+    catch {
+        throw "Failed to parse app-version.json: $($_.Exception.Message)"
     }
 
-    $versionMatch = [regex]::Match(
-        $packageMatch.Groups[1].Value,
-        '(?m)^\s*version\s*=\s*"([^"]+)"'
-    )
-
-    if (-not $versionMatch.Success) {
-        throw "Could not read package.version from $ManifestPath."
-    }
-
-    $version = $versionMatch.Groups[1].Value.Trim()
+    $version = [string]$versionConfig.version
 
     if (
         $version -notmatch
-        '^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$'
+        '^\d+\.\d+\.\d+$'
     ) {
-        throw "Invalid Desktop version '$version' in Cargo.toml."
+        throw "app-version.json must contain version in the format 1.0.0"
     }
 
     return $version
 }
 
+Require-Path -Path $VersionFile -Description "Root app-version.json"
 Require-Path -Path $CargoManifest -Description "Desktop Cargo.toml"
 
 if (-not (Get-Command "cargo" -ErrorAction SilentlyContinue)) {
@@ -74,22 +64,28 @@ if (-not (Get-Command "Compress-Archive" -ErrorAction SilentlyContinue)) {
     throw "Compress-Archive is unavailable. Use a supported Windows PowerShell version."
 }
 
-$DesktopVersion = Get-DesktopVersion -ManifestPath $CargoManifest
+$DesktopVersion = Get-AppVersion -VersionPath $VersionFile
 
 $BuiltExePath = Join-Path $ReleaseDir "CypherSR-Desktop.exe"
+$VersionedReleaseDir = Join-Path $ReleaseRoot "v$DesktopVersion"
+$DesktopBuildDir = Join-Path $VersionedReleaseDir "Desktop Build"
+$PublishingZipDir = Join-Path $VersionedReleaseDir "Publishing zip"
+$VersioningDir = Join-Path $VersionedReleaseDir "versioning"
+$DesktopBuildExePath = Join-Path $DesktopBuildDir "CypherSR-Desktop.exe"
 $VersionedZipName = "CypherSR-Desktop-GUI-v$DesktopVersion-win-x64.zip"
-$VersionedZipPath = Join-Path $DistDir $VersionedZipName
+$VersionedZipPath = Join-Path $PublishingZipDir $VersionedZipName
 
 Write-Host ""
 Write-Host "============================================"
 Write-Host "Building CypherSR Desktop"
 Write-Host "============================================"
-Write-Host "Project:         $FrontendRoot"
+Write-Host "Project:         $DesktopRoot"
 Write-Host "Desktop version: $DesktopVersion"
+Write-Host "Build output:    $DesktopBuildExePath"
 Write-Host "Release asset:   $VersionedZipPath"
 Write-Host ""
 
-Push-Location $FrontendRoot
+Push-Location $DesktopRoot
 
 try {
     cargo build --release --manifest-path $CargoManifest
@@ -111,13 +107,20 @@ if ($builtFile.Length -le 0) {
     throw "The built Desktop executable is empty: $BuiltExePath"
 }
 
-# Create the release directory without touching other release assets.
-New-Item -ItemType Directory -Path $DistDir -Force | Out-Null
+# Create the versioned build and publishing directories without touching other
+# release assets.
+New-Item -ItemType Directory -Path @(
+    $DesktopBuildDir,
+    $PublishingZipDir,
+    $VersioningDir
+) -Force | Out-Null
+
+Copy-Item -LiteralPath $BuiltExePath -Destination $DesktopBuildExePath -Force
 
 # Use a temporary staging directory so the ZIP contains only the intended EXE.
-$StageDir = Join-Path $DistDir ".desktop-zip-staging"
+$StageDir = Join-Path $PublishingZipDir ".desktop-zip-staging"
 $StagedExePath = Join-Path $StageDir "CypherSR-Desktop.exe"
-$TempZipPath = Join-Path $DistDir ".tmp-$VersionedZipName"
+$TempZipPath = Join-Path $PublishingZipDir ".tmp-$VersionedZipName"
 
 try {
     if (Test-Path -LiteralPath $StageDir) {
@@ -175,6 +178,17 @@ finally {
 
 Require-Path -Path $VersionedZipPath -Description "Versioned Desktop GUI ZIP"
 
+$desktopVersionJson = @{
+    version = $DesktopVersion
+} | ConvertTo-Json
+
+New-Item -ItemType Directory -Path $VersioningDir -Force | Out-Null
+[System.IO.File]::WriteAllText(
+    (Join-Path $VersioningDir "desktop.json"),
+    $desktopVersionJson,
+    [System.Text.UTF8Encoding]::new($false)
+)
+
 $finalZip = Get-Item -LiteralPath $VersionedZipPath
 $compressionRatio = if ($builtFile.Length -gt 0) {
     [math]::Round((1 - ($finalZip.Length / $builtFile.Length)) * 100, 1)
@@ -188,7 +202,7 @@ Write-Host "============================================"
 Write-Host "Desktop build completed successfully"
 Write-Host "============================================"
 Write-Host "Desktop version: $DesktopVersion"
-Write-Host "Build output:    $BuiltExePath"
+Write-Host "Build output:    $DesktopBuildExePath"
 Write-Host "Release asset:   $VersionedZipPath"
 Write-Host "EXE size:        $([math]::Round($builtFile.Length / 1MB, 2)) MB"
 Write-Host "ZIP size:        $([math]::Round($finalZip.Length / 1MB, 2)) MB"

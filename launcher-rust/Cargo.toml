@@ -4,7 +4,7 @@ version = "1.2.0"
 edition = "2024"
 
 [[bin]]
-name = "CypherSR"
+name = "CypherSR-Updater"
 path = "src/main.rs"
 
 [dependencies]

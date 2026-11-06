@@ -4,7 +4,7 @@ $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
 
-$release = Join-Path $root "release"
+$releaseRoot = Join-Path $root "release"
 $build = Join-Path $root "dist-sea"
 $packageRoot = Join-Path $build "packages"
 
@@ -12,7 +12,7 @@ $versionFile = Join-Path $root "app-version.json"
 $publicSource = Join-Path $root "public"
 $ytDlpSource = Join-Path $root "vendor\yt-dlp.exe"
 $ffmpegSource = Join-Path $root "vendor\ffmpeg\bin\ffmpeg.exe"
-$defaultMpvSource = Join-Path (Split-Path -Parent $root) "CypherSR-desktop\resources\mpv"
+$defaultMpvSource = Join-Path $root "vendor\mpv"
 $mpvSource = if ($env:CYPHERSR_MPV_SOURCE) {
     $env:CYPHERSR_MPV_SOURCE
 } else {
@@ -20,11 +20,11 @@ $mpvSource = if ($env:CYPHERSR_MPV_SOURCE) {
 }
 
 $cargoManifest = Join-Path $root "launcher-rust\Cargo.toml"
-$rustLauncher = Join-Path $root "launcher-rust\target\release\CypherSR.exe"
+$rustLauncher = Join-Path $root "launcher-rust\target\release\CypherSR-Updater.exe"
 
 $repository = "Cypherusuh/CypherSR"
 
-$launcherName = "Cypher-Updater.exe"
+$launcherName = "CypherSR-Updater.exe"
 $coreName = "CypherSR-Core.exe"
 $versionJsonName = "version.json"
 $vendorVersionJsonName = "vendor-version.json"
@@ -56,7 +56,12 @@ if ($vendorVersion -notmatch '^\d+\.\d+\.\d+$') {
     throw "app-version.json must contain vendorVersion in the format 1.0.0"
 }
 
-# Backend and vendor versions are independent of the Desktop version.
+$versionRoot = Join-Path $releaseRoot "v$appVersion"
+$release = Join-Path $versionRoot "Backend Build"
+$publishingZip = Join-Path $versionRoot "Publishing zip"
+$versioning = Join-Path $versionRoot "versioning"
+
+# Backend and Desktop share the app version; the vendor version is independent.
 #
 # Standalone backend release:
 #   Tag: v{BackendVersion}
@@ -100,10 +105,11 @@ foreach ($commandName in @("node", "npx", "cargo")) {
 }
 
 New-Item -ItemType Directory -Force -Path `
-    $release, $build, $packageRoot | Out-Null
+    $releaseRoot, $release, $publishingZip, $versioning, $build, $packageRoot |
+    Out-Null
 
 # Preserve user data. Never clean or package release\data.
-$dataDirectory = Join-Path $release "data"
+$dataDirectory = Join-Path $releaseRoot "data"
 
 New-Item -ItemType Directory -Force -Path $dataDirectory |
     Out-Null
@@ -221,6 +227,11 @@ Build-SeaExecutable `
 Write-Host ""
 Write-Host "Building Rust launcher..."
 
+$legacyRustLauncher = Join-Path $root "launcher-rust\target\release\CypherSR.exe"
+if (Test-Path -LiteralPath $legacyRustLauncher) {
+    Remove-Item -LiteralPath $legacyRustLauncher -Force
+}
+
 cargo build --release --manifest-path $cargoManifest
 
 if ($LASTEXITCODE -ne 0) {
@@ -232,6 +243,11 @@ if (-not (Test-Path -LiteralPath $rustLauncher -PathType Leaf)) {
 }
 
 $releaseLauncher = Join-Path $release $launcherName
+$legacyLauncher = Join-Path $release "Cypher-Updater.exe"
+
+if (Test-Path -LiteralPath $legacyLauncher) {
+    Remove-Item -LiteralPath $legacyLauncher -Force
+}
 
 Copy-Item -LiteralPath $rustLauncher `
     -Destination $releaseLauncher -Force
@@ -282,6 +298,22 @@ $vendorVersionJson = @{
     [System.Text.UTF8Encoding]::new($false)
 )
 
+$backendVersionJson = @{
+    version = $appVersion
+} | ConvertTo-Json
+
+[System.IO.File]::WriteAllText(
+    (Join-Path $versioning "backend.json"),
+    $backendVersionJson,
+    [System.Text.UTF8Encoding]::new($false)
+)
+
+[System.IO.File]::WriteAllText(
+    (Join-Path $versioning "vendor.json"),
+    $vendorVersionJson,
+    [System.Text.UTF8Encoding]::new($false)
+)
+
 # ------------------------------------------------------------
 # 5. Write the installed app version manifest
 # ------------------------------------------------------------
@@ -301,7 +333,7 @@ $versionJson = @{
 #
 # Full ZIP:
 #   CypherSR/
-#     Cypher-Updater.exe
+#     CypherSR-Updater.exe
 #     CypherSR-Core.exe
 #     version.json
 #     public/
@@ -396,9 +428,9 @@ Copy-AppUpdatePayload -Destination $appUpdateStage
 Copy-Item -LiteralPath (Join-Path $release "vendor") `
     -Destination $vendorStage -Recurse -Force
 
-$fullZip = Join-Path $release $fullAssetName
-$updateZip = Join-Path $release $updateAssetName
-$vendorZip = Join-Path $release $vendorAssetName
+$fullZip = Join-Path $publishingZip $fullAssetName
+$updateZip = Join-Path $publishingZip $updateAssetName
+$vendorZip = Join-Path $publishingZip $vendorAssetName
 
 Compress-StageZip -Stage $fullStage -Destination $fullZip
 Compress-StageZip -Stage $appUpdateStage -Destination $updateZip
@@ -537,7 +569,7 @@ Write-Host ""
 Write-Host "Vendor update URL:  $vendorUrl"
 Write-Host "Vendor SHA-256:     $vendorSha256"
 Write-Host ""
-Write-Host "Upload the ZIP assets and latest.json to release $releaseTag."
+Write-Host "Upload ZIPs from $publishingZip and latest.json from $release to release $releaseTag."
 Write-Host "Backend updates exclude vendor files and the launcher."
 Write-Host "Vendor updates are packaged separately."
 Write-Host "Existing release\data was preserved."

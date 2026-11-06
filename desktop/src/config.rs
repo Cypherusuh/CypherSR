@@ -24,6 +24,7 @@ pub struct ServerConfig {
 #[serde(default)]
 pub struct PlaybackConfig {
     pub max_video_height: u32,
+    pub volume: f64,
     pub media_dir: String,
     pub ffmpeg_path: String,
     pub mpv_path: String,
@@ -68,6 +69,7 @@ impl Default for PlaybackConfig {
     fn default() -> Self {
         Self {
             max_video_height: 240,
+            volume: 0.4,
             media_dir: String::new(),
             ffmpeg_path: String::new(),
             mpv_path: "backend/vendor/mpv/mpv.exe".into(),
@@ -178,6 +180,12 @@ impl AppConfig {
             return Err("Maximum video height must be positive.".into());
         }
 
+        if !self.playback.volume.is_finite()
+            || !(0.0..=1.0).contains(&self.playback.volume)
+        {
+            return Err("Playback volume must be between 0 and 1.".into());
+        }
+
         if self.queue.limit == 0 {
             return Err("Queue limit must be positive.".into());
         }
@@ -210,8 +218,19 @@ mod tests {
             .expect("packaged config.toml should be valid");
 
         assert_eq!(config.playback.mpv_path, "backend/vendor/mpv/mpv.exe");
+        assert_eq!(config.playback.volume, 0.4);
         config
             .validate()
             .expect("packaged defaults should be valid");
+    }
+
+    #[test]
+    fn missing_playback_volume_uses_40_percent_default() {
+        let config: AppConfig = toml::from_str(
+            "[playback]\nmpv_path = \"backend/vendor/mpv/mpv.exe\"\n",
+        )
+        .expect("legacy config.toml should use playback defaults");
+
+        assert_eq!(config.playback.volume, 0.4);
     }
 }

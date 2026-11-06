@@ -55,7 +55,7 @@ use video_preview::{native_window_handle, VideoPreviewController};
 slint::include_modules!();
 
 const VIDEO_SYNC_INTERVAL: Duration = Duration::from_millis(100);
-const PATCHER_EXE: &str = "Cypher-Updater.exe";
+const PATCHER_EXE: &str = "CypherSR-Updater.exe";
 const BACKEND_DIRECTORY: &str = "backend";
 const DATA_DIRECTORY: &str = "data";
 const SONG_REQUEST_HOME_ENV: &str = "SONG_REQUEST_HOME";
@@ -124,27 +124,49 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
-    let config = config::AppConfig::load_or_create()?;
-    let api_base_url = config.api_base_url();
+    let config = Rc::new(RefCell::new(config::AppConfig::load_or_create()?));
+    let api_base_url = config.borrow().api_base_url();
+    let volume = config.borrow().playback.volume;
 
     println!("[Config] Backend address: {api_base_url}");
 
     let ui = MainWindow::new()?;
+    let preferred_volume = Arc::new(Mutex::new(volume));
+    ui.set_playback_volume(volume as f32);
 
     let video_controller = Rc::new(RefCell::new(VideoPreviewController::new(
-        config.playback.mpv_path.clone(),
+        config.borrow().playback.mpv_path.clone(),
         api_base_url.clone(),
     )));
 
-    let playback_sync = Arc::new(Mutex::new(PlaybackSyncState::default()));
+    let mut initial_playback = PlaybackSyncState::default();
+    initial_playback.playback.volume = volume;
+    let playback_sync = Arc::new(Mutex::new(initial_playback));
 
     let control_sender = start_player_control_worker(api_base_url.clone());
 
     setup_window_controls(&ui, video_controller.clone());
     setup_overlay_actions(&ui, api_base_url.clone());
-    setup_playback_controls(&ui, api_base_url.clone(), control_sender);
+    setup_playback_controls(
+        &ui,
+        api_base_url.clone(),
+        control_sender.clone(),
+        preferred_volume.clone(),
+        playback_sync.clone(),
+        config,
+    );
+    send_player_control(
+        &control_sender,
+        "volume",
+        Some(volume),
+    );
 
-    start_backend_polling(&ui, playback_sync.clone(), api_base_url.clone());
+    start_backend_polling(
+        &ui,
+        playback_sync.clone(),
+        api_base_url.clone(),
+        preferred_volume,
+    );
     start_twitch_status_polling(&ui, api_base_url);
 
     let video_timer = setup_video_preview(
@@ -295,7 +317,7 @@ fn acquire_single_instance() -> std::io::Result<OwnedHandle> {
     })
 }
 
-/// Launches Cypher-Updater.exe from the backend directory.
+/// Launches CypherSR-Updater.exe from the backend directory.
 fn launch_backend_patcher() -> Result<BackendPatcher, Box<dyn std::error::Error>> {
     let executable = std::env::current_exe()?;
 
@@ -308,7 +330,10 @@ fn launch_backend_patcher() -> Result<BackendPatcher, Box<dyn std::error::Error>
     let (patcher_path, runtime_dir) = if bundled_patcher.is_file() {
         (bundled_patcher, backend_dir)
     } else {
-        (app_dir.join("CypherSR.exe"), app_dir.to_path_buf())
+        (
+            app_dir.join("CypherSR-Updater.exe"),
+            app_dir.to_path_buf(),
+        )
     };
 
     if !patcher_path.is_file() {
@@ -695,6 +720,9 @@ fn setup_playback_controls(
     ui: &MainWindow,
     api_base_url: String,
     control_sender: Sender<PlayerControlRequest>,
+    preferred_volume: Arc<Mutex<f64>>,
+    playback_sync: Arc<Mutex<PlaybackSyncState>>,
+    config: Rc<RefCell<config::AppConfig>>,
 ) {
     ui.on_skip_requested(move || {
         backend::skip(api_base_url.clone());
@@ -711,9 +739,37 @@ fn setup_playback_controls(
     });
 
     let sender = control_sender.clone();
+    let weak_ui = ui.as_weak();
 
     ui.on_volume_requested(move |volume| {
         let volume = f64::from(volume).clamp(0.0, 1.0);
+
+        if let Some(ui) = weak_ui.upgrade() {
+            ui.set_playback_volume(volume as f32);
+        }
+
+        match preferred_volume.lock() {
+            Ok(mut preferred_volume) => *preferred_volume = volume,
+            Err(error) => {
+                eprintln!("[Config] Failed to update playback volume: {error}");
+            }
+        }
+
+        match playback_sync.lock() {
+            Ok(mut sync) => sync.playback.volume = volume,
+            Err(error) => {
+                eprintln!("[Player] Failed to update synchronized volume: {error}");
+            }
+        }
+
+        {
+            let mut app_config = config.borrow_mut();
+            app_config.playback.volume = volume;
+
+            if let Err(error) = app_config.save() {
+                eprintln!("[Config] Failed to save playback volume: {error}");
+            }
+        }
 
         send_player_control(
             &sender,
@@ -748,13 +804,35 @@ fn start_backend_polling(
     ui: &MainWindow,
     playback_sync: Arc<Mutex<PlaybackSyncState>>,
     api_base_url: String,
+    preferred_volume: Arc<Mutex<f64>>,
 ) {
     let weak_ui = ui.as_weak();
+    let playback_sync_for_volume = playback_sync.clone();
 
     backend::start_polling(
         api_base_url,
         playback_sync,
         move |snapshot| {
+            let preferred_volume = match preferred_volume.lock() {
+                Ok(volume) => *volume,
+                Err(error) => {
+                    eprintln!("[Backend] Playback volume mutex poisoned: {error}");
+                    return;
+                }
+            };
+            let mut snapshot = snapshot;
+            snapshot.playback.volume = preferred_volume;
+
+            match playback_sync_for_volume.lock() {
+                Ok(mut sync) => sync.playback.volume = preferred_volume,
+                Err(error) => {
+                    eprintln!(
+                        "[Backend] Playback sync mutex poisoned while applying configured volume: {error}"
+                    );
+                    return;
+                }
+            }
+
             let weak_ui = weak_ui.clone();
 
             let result = slint::invoke_from_event_loop(move || {

@@ -63,9 +63,19 @@ impl Default for PlaybackState {
         Self {
             position: 0.0,
             duration: 0.0,
-            volume: 1.0,
+            volume: 0.4,
             paused: true,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PlaybackState;
+
+    #[test]
+    fn default_playback_volume_is_40_percent() {
+        assert_eq!(PlaybackState::default().volume, 0.4);
     }
 }
 

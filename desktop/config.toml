@@ -4,6 +4,7 @@ port = 8765
 
 [playback]
 max_video_height = 240
+volume = 0.4
 media_dir = ""
 ffmpeg_path = ""
 mpv_path = "backend/vendor/mpv/mpv.exe"
