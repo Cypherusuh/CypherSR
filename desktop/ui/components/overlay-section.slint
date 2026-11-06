@@ -1,0 +1,140 @@
+
+import { OverlayRow } from "overlay-row.slint";
+
+export component OverlaySection inherits Rectangle {
+    in-out property <bool> expanded: false;
+    in-out property <string> copy-status: "";
+
+    in-out property <string> queue-copy-status: "";
+    in-out property <string> played-now-copy-status: "";
+    in-out property <string> player-copy-status: "";
+
+    callback copy-overlay-url(string) -> bool;
+
+    background: #191B1E;
+    border-width: 1px;
+    border-color: #292B30;
+    border-radius: 3px;
+
+    // The panel grows and shrinks with the expanded state.
+    height: root.expanded ? 137px : 34px;
+
+    animate height {
+        duration: 220ms;
+        easing: ease-in-out;
+    }
+
+    // Header remains fixed at the top.
+    TouchArea {
+        x: 5px;
+        y: 5px;
+        width: parent.width - 10px;
+        height: 24px;
+
+        HorizontalLayout {
+            spacing: 7px;
+            alignment: start;
+
+            Text {
+                text: root.expanded ? "⌄" : "›";
+                color: #0077C2;
+                font-size: 16px;
+                vertical-alignment: center;
+            }
+
+            Text {
+                text: "OBS Overlays";
+                color: #E3E4E7;
+                font-size: 12px;
+                font-weight: 600;
+                vertical-alignment: center;
+            }
+
+            Rectangle {
+                background: transparent;
+                horizontal-stretch: 1;
+            }
+
+            Text {
+                text: "Click here to copy Browser Source for your OBS";
+                color: #858891;
+                font-size: 10px;
+                vertical-alignment: center;
+            }
+        }
+
+        clicked => {
+            root.expanded = !root.expanded;
+            root.copy-status = "";
+            root.queue-copy-status = "";
+            root.played-now-copy-status = "";
+            root.player-copy-status = "";
+        }
+    }
+
+    // Keep the contents mounted and clip them while the panel is closed.
+    Rectangle {
+        x: 5px;
+        y: 33px;
+        width: parent.width - 10px;
+        height: root.expanded ? 99px : 0px;
+        clip: true;
+        background: transparent;
+
+        animate height {
+            duration: 220ms;
+            easing: ease-in-out;
+        }
+
+        VerticalLayout {
+            spacing: 4px;
+
+            Rectangle {
+                height: 1px;
+                background: #303238;
+            }
+
+            OverlayRow {
+                label: "Queue";
+                url: "http://127.0.0.1:8765/queue.html";
+                copy-status: root.queue-copy-status;
+
+                copy-requested(url) => {
+                    root.queue-copy-status =
+                        root.copy-overlay-url(url) ? "Copied URL" : "Copy failed";
+                    root.played-now-copy-status = "";
+                    root.player-copy-status = "";
+                    root.copy-status = "";
+                }
+            }
+
+            OverlayRow {
+                label: "Played Now";
+                url: "http://127.0.0.1:8765/played-now.html";
+                copy-status: root.played-now-copy-status;
+
+                copy-requested(url) => {
+                    root.played-now-copy-status =
+                        root.copy-overlay-url(url) ? "Copied URL" : "Copy failed";
+                    root.queue-copy-status = "";
+                    root.player-copy-status = "";
+                    root.copy-status = "";
+                }
+            }
+
+            OverlayRow {
+                label: "Player";
+                url: "http://127.0.0.1:8765/player.html";
+                copy-status: root.player-copy-status;
+
+                copy-requested(url) => {
+                    root.player-copy-status =
+                        root.copy-overlay-url(url) ? "Copied URL" : "Copy failed";
+                    root.queue-copy-status = "";
+                    root.played-now-copy-status = "";
+                    root.copy-status = "";
+                }
+            }
+        }
+    }
+}

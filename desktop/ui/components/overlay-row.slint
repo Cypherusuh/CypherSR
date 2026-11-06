@@ -1,0 +1,138 @@
+
+export component OverlayRow inherits Rectangle {
+    in property <string> label: "Overlay";
+    in property <string> url: "";
+    in property <string> copy-status: "";
+
+    // Internal state for the temporary feedback.
+    property <bool> status-visible: false;
+
+    callback copy-requested(string);
+
+    background: transparent;
+    width: 100%;
+    height: 30px;
+
+    // Automatically hide the feedback after a short delay.
+    status-timer := Timer {
+        interval: 1800ms;
+        running: false;
+
+        triggered() => {
+            root.status-visible = false;
+        }
+    }
+
+    // Restart the timer whenever the status changes.
+    changed copy-status => {
+        if (root.copy-status != "") {
+            root.status-visible = true;
+            status-timer.restart();
+        } else {
+            root.status-visible = false;
+            status-timer.stop();
+        }
+    }
+
+    // Name and URL use the row's available space.
+    HorizontalLayout {
+        x: 0px;
+        y: 0px;
+        width: 100%;
+        height: 30px;
+        spacing: 0px;
+
+        // Fixed label column
+    Rectangle {
+            width: 120px;
+            background: transparent;
+
+            Text {
+                width: 100%;
+                height: 30px;
+                text: root.label;
+                color: #E3E4E7;
+                font-size: 11px;
+                vertical-alignment: center;
+            }
+        }
+
+        // URL uses only the space between label and actions
+    Rectangle {
+            horizontal-stretch: 1;
+            background: transparent;
+
+            Text {
+                width: 100%;
+                height: 30px;
+                text: root.url;
+                color: #92959C;
+                font-size: 10px;
+                overflow: elide;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+
+        // Actions stay at the right edge
+    HorizontalLayout {
+            width: 150px;
+            height: 25px;
+            spacing: 6px;
+            alignment: end;
+
+            Rectangle {
+                width: 62px;
+                height: 25px;
+                background: transparent;
+                opacity: root.status-visible ? 1.0 : 0.0;
+
+                animate opacity {
+                    duration: 180ms;
+                    easing: ease-out;
+                }
+
+                Text {
+                    width: 100%;
+                    height: 100%;
+                    text: root.copy-status;
+                    color: root.copy-status == "Copied URL"
+                        ? #0077C2
+                        : #E07A7A;
+                    font-size: 9px;
+                    horizontal-alignment: right;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+            }
+
+            TouchArea {
+                width: 82px;
+                height: 25px;
+
+                Rectangle {
+                    width: 100%;
+                    height: 100%;
+                    border-radius: 3px;
+                    background: #102A3A;
+                    border-width: 1px;
+                    border-color: #0077C2;
+
+                    Text {
+                        width: 100%;
+                        height: 100%;
+                        text: "Copy URL";
+                        color: #0077C2;
+                        font-size: 10px;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+
+                clicked => {
+                    root.copy-requested(root.url);
+                }
+            }
+        }
+    }
+}

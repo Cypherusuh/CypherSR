@@ -1,0 +1,223 @@
+
+import { ScrollView } from "std-widgets.slint";
+import { TitleBar } from "components/title-bar.slint";
+import { NowPlaying } from "components/now-playing.slint";
+import { Playlist } from "components/playlist.slint";
+import { OverlaySection } from "components/overlay-section.slint";
+import { Footer } from "components/footer.slint";
+import { VideoPreview } from "components/video-preview.slint";
+import { PlayerControl } from "components/player-control.slint";
+
+export component MainWindow inherits Window {
+    title: "Cypher's Song Request";
+    no-frame: true;
+    resize-border-width: 6px;
+
+    preferred-width: 480px;
+    preferred-height: 700px;
+    min-width: 480px;
+    min-height: 420px;
+    background: #101114;
+
+    in-out property <string> username: "Username";
+    in-out property <bool> connected: false;
+
+    // Twitch state reported by the backend API.
+    in-out property <bool> twitch-connected: false;
+    in-out property <bool> twitch-connecting: false;
+    in-out property <string> twitch-status: "offline";
+    in-out property <string> current-track: "Nothing playing";
+    in-out property <string> current-artist: "Request a song to start playback";
+    in-out property <[string]> queue-items: [];
+    in-out property <int> selected-queue-index: -1;
+    in-out property <bool> overlays-expanded: false;
+    in-out property <bool> video-visible: false;
+    in-out property <string> current-media-url: "";
+    in-out property <string> copy-status: "";
+
+    // Playback state reported by the backend from mpv.
+    in-out property <float> playback-position: 0;
+    in-out property <float> playback-duration: 0;
+    in-out property <float> playback-volume: 1;
+    in-out property <bool> playback-paused: true;
+
+    callback seek-requested(float);
+    callback volume-requested(float);
+    callback playback-toggle-requested();
+
+    out property <length> video-preview-x: video-preview.preview-x;
+    out property <length> video-preview-y: video-preview.preview-y;
+    out property <length> video-preview-width: video-preview.preview-width;
+    out property <length> video-preview-height: video-preview.preview-height;
+
+    callback connection-toggle-requested();
+    callback skip-requested();
+    callback video-visibility-changed(bool);
+    callback video-source-changed(string);
+    callback minimize-requested();
+    callback close-window-requested();
+    callback open-creator-link();
+    callback copy-overlay-url(string) -> bool;
+    callback queue-item-selected(int);
+
+    changed current-media-url => {
+        if (root.video-visible && root.current-media-url != "") {
+            root.video-source-changed(root.current-media-url);
+        }
+    }
+
+    VerticalLayout {
+        width: 100%;
+        height: 100%;
+        padding: 9px;
+        spacing: 8px;
+
+        TitleBar {
+            width: 100%;
+            username: root.username;
+            twitch-connected: root.twitch-connected;
+            twitch-connecting: root.twitch-connecting;
+            twitch-status: root.twitch-status;
+
+            connection-toggle-requested => {
+                root.connection-toggle-requested();
+            }
+
+            minimize-requested => {
+                root.minimize-requested();
+            }
+
+            close-window-requested => {
+                root.close-window-requested();
+            }
+        }
+
+        ScrollView {
+            width: 100%;
+            vertical-stretch: 1;
+            horizontal-scrollbar-policy: always-off;
+            vertical-scrollbar-policy: as-needed;
+
+            VerticalLayout {
+                width: 100%;
+                spacing: 8px;
+
+                NowPlaying {
+                    width: 100%;
+                    height: 124px;
+                    vertical-stretch: 0;
+
+                    current-track: root.current-track;
+                    current-artist: root.current-artist;
+                    video-visible: root.video-visible;
+
+                    skip-requested => {
+                        root.skip-requested();
+                    }
+
+                    video-toggle-requested => {
+                        root.video-visible = !root.video-visible;
+                        root.video-visibility-changed(root.video-visible);
+
+                        if (root.video-visible && root.current-media-url != "") {
+                            root.video-source-changed(root.current-media-url);
+                        }
+                    }
+                }
+
+                PlayerControl {
+                    width: 100%;
+                    height: 112px;
+                    vertical-stretch: 0;
+
+                    position: root.playback-position;
+                    duration: root.playback-duration;
+                    volume: root.playback-volume;
+                    paused: root.playback-paused;
+                    enabled: root.current-media-url != "";
+                    track-key: root.current-media-url;
+
+                    seek-requested(position) => {
+                        root.seek-requested(position);
+                    }
+
+                    volume-requested(volume) => {
+                        root.volume-requested(volume);
+                    }
+
+                    playback-toggle-requested => {
+                        root.playback-toggle-requested();
+                    }
+                }
+
+                // Native video is positioned over this component.
+                video-preview := VideoPreview {
+                    width: 100%;
+                    height: root.video-visible ? parent.width * 9 / 16 : 0px;
+                    vertical-stretch: 0;
+
+                    video-visible: root.video-visible;
+                    has-video: root.current-media-url != "";
+                    current-track: root.current-track;
+                    current-artist: root.current-artist;
+
+                    animate height {
+                        duration: 180ms;
+                        easing: linear;
+                    }
+                }
+
+                HorizontalLayout {
+                    width: 100%;
+                    height: 18px;
+                    spacing: 8px;
+                    alignment: center;
+
+                    Text {
+                        text: "PLAYLIST";
+                        color: #E3E4E7;
+                        font-size: 11px;
+                        font-weight: 700;
+                    }
+
+                    Rectangle {
+                        background: #303238;
+                        height: 1px;
+                        horizontal-stretch: 1;
+                    }
+                }
+
+                Playlist {
+                    width: 100%;
+                    height: 180px;
+                    vertical-stretch: 0;
+
+                    queue-items: root.queue-items;
+                    selected-queue-index <=> root.selected-queue-index;
+
+                    queue-item-selected(index) => {
+                        root.queue-item-selected(index);
+                    }
+                }
+
+                OverlaySection {
+                    width: 100%;
+                    expanded <=> root.overlays-expanded;
+                    copy-status <=> root.copy-status;
+
+                    copy-overlay-url(url) => {
+                        root.copy-overlay-url(url);
+                    }
+                }
+
+                Footer {
+                    width: 100%;
+
+                    open-creator-link => {
+                        root.open-creator-link();
+                    }
+                }
+            }
+        }
+    }
+}

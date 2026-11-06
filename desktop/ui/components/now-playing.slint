@@ -1,0 +1,96 @@
+
+export component NowPlaying inherits Rectangle {
+    in property <string> current-track: "Nothing playing";
+    in property <string> current-artist: "Request a song to start playback";
+    in property <bool> video-visible: false;
+
+    callback skip-requested();
+    callback video-toggle-requested();
+
+    background: #191B1E;
+    border-width: 1px;
+    border-color: #303238;
+    border-radius: 4px;
+    min-height: 124px;
+
+    VerticalLayout {
+        padding: 10px;
+        spacing: 5px;
+
+        Text {
+            text: "NOW PLAYING";
+            color: #0077C2;
+            font-size: 10px;
+            font-weight: 700;
+        }
+
+        Text {
+            text: root.current-track;
+            color: #F0F0F2;
+            font-size: 20px;
+            font-weight: 600;
+            overflow: elide;
+        }
+
+        Text {
+            text: root.current-artist;
+            color: #92959C;
+            font-size: 12px;
+            overflow: elide;
+        }
+
+        HorizontalLayout {
+            width: 100%;
+            height: 32px;
+            spacing: 8px;
+            alignment: start;
+
+            TouchArea {
+                width: 112px;
+                height: 32px;
+
+                Rectangle {
+                    width: 100%;
+                    height: 100%;
+                    background: #0077C2;
+                    border-radius: 4px;
+
+                    Text {
+                        text: "Skip";
+                        color: #FFFFFF;
+                        font-size: 12px;
+                        font-weight: 600;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+
+                clicked => {
+                    root.skip-requested();
+                }
+            }
+
+            Rectangle {
+                background: transparent;
+                horizontal-stretch: 1;
+            }
+
+            TouchArea {
+                width: 90px;
+                height: 32px;
+
+                Text {
+                    text: root.video-visible ? "Hide Video ×" : "Show Video ›";
+                    color: #0077C2;
+                    font-size: 11px;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+
+                clicked => {
+                    root.video-toggle-requested();
+                }
+            }
+        }
+    }
+}
