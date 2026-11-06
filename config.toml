@@ -1,0 +1,18 @@
+[server]
+host = "127.0.0.1"
+port = 8765
+
+[playback]
+max_video_height = 240
+media_dir = ""
+ffmpeg_path = ""
+mpv_path = "backend/vendor/mpv/mpv.exe"
+yt_dlp_path = "yt-dlp"
+radio_url = ""
+
+[queue]
+limit = 10
+per_user_limit = 2
+
+[commands]
+prefix = "!"

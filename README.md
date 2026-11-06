@@ -16,6 +16,12 @@ implement Twitch chat ingestion, song-request submission, or queue management.
   authentication and connection state.
 - The app launches `mpv` as a child process and embeds its native video window
   in the desktop UI. mpv is controlled through its named-pipe IPC interface.
+- Release packages bundle MPV at `backend/vendor/mpv/mpv.exe`. On first
+  launch, the desktop runs `backend/vendor/mpv/mpv-register.bat` to register it;
+  it repeats registration only if the package is moved to a different path.
+- The `backend/` directory contains the backend updater, core, `public/`,
+  `vendor/`, and backend version metadata. The desktop executable and
+  `config.toml` stay at the package root; persistent data remains in `data/`.
 - `config.toml` stores the backend address and playback-related settings,
   including the configured mpv executable path.
 
@@ -68,3 +74,17 @@ connectivity and playback status.
 - **mpv** — external video/audio playback process, controlled using IPC.
 - **raw-window-handle** and **windows-sys** — native Windows window embedding.
 - **arboard** — clipboard support; **open** — opening links in the browser.
+
+## Independent release versions
+
+The desktop app, backend, and bundled vendor tools are versioned independently.
+Desktop releases use `desktop-vX.Y.Z` tags and a versioned desktop executable
+asset; backend releases use `vX.Y.Z` tags. The desktop updater searches stable
+releases for the newest desktop executable instead of assuming the repository's
+single latest release is a desktop release.
+
+Separate frontend and backend repositories are optional. They make ownership
+and release channels clearer, but distinct versions, tags, assets, and update
+checks can also work in one repository. The current release endpoints use
+`Cypherusuh/CypherSR`; changing repositories requires updating the publishers
+and both updaters together.

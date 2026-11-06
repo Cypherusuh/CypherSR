@@ -1,21 +1,15 @@
-
-param(
-    [Parameter(Mandatory = $true)]
-    [string]$DesktopRoot,
-
-    [Parameter(Mandatory = $true)]
-    [string]$BackendRoot,
-
-    [Parameter(Mandatory = $true)]
-    [string]$OutputRoot
-)
-
+$DesktopRoot = "D:\Work\Portfolio\CypherSR-desktop"
+$BackendRoot = "D:\Work\Portfolio\CypherSR-lite"
+$OutputRoot = "D:\Work\Portfolio\CypherSR"
 $ErrorActionPreference = "Stop"
 
 $DesktopExeName = "CypherSR-Desktop.exe"
-$PatcherExeName = "CypherSR.exe"
-$CoreExeName = "CypherSR-core.exe"
+$PatcherExeName = "Cypher-Updater.exe"
+$CoreExeName = "CypherSR-Core.exe"
+$BackendDirectoryName = "backend"
+$MpvDirectoryName = "mpv"
 $Repository = "Cypherusuh/CypherSR"
+$FullFolderName = "CypherSR Desktop"
 
 function Require-Path {
     param(
@@ -159,8 +153,11 @@ $desktopRelease = Join-Path $DesktopRoot "release"
 $desktopVersion = Get-DesktopVersion -ManifestPath $cargoManifest
 
 $desktopExe = Join-Path $DesktopRoot "target\release\$DesktopExeName"
+$desktopConfig = Join-Path $DesktopRoot "config.toml"
+$mpvSource = Join-Path $DesktopRoot "resources\mpv"
 $desktopGuiZipName = "CypherSR-Desktop-GUI-v$desktopVersion-win-x64.zip"
 $desktopGuiZipSource = Join-Path $desktopRelease $desktopGuiZipName
+$desktopUpdateAssetName = "CypherSR-Desktop-GUI-v$desktopVersion-win-x64.exe"
 
 $backendRelease = Join-Path $BackendRoot "release"
 $backendConfigPath = Join-Path $BackendRoot "app-version.json"
@@ -174,6 +171,9 @@ $backendVendor = Join-Path $backendRelease "vendor"
 foreach ($item in @(
     @{ Path = $cargoManifest; Description = "Desktop Cargo.toml" },
     @{ Path = $desktopExe; Description = "Built Desktop executable" },
+    @{ Path = $desktopConfig; Description = "Desktop config.toml template" },
+    @{ Path = (Join-Path $mpvSource "mpv.exe"); Description = "Bundled MPV executable" },
+    @{ Path = (Join-Path $mpvSource "mpv-register.bat"); Description = "MPV registration script" },
     @{ Path = $desktopGuiZipSource; Description = "Versioned Desktop GUI ZIP" },
     @{ Path = $backendConfigPath; Description = "Backend app-version.json" },
     @{ Path = $backendManifestPath; Description = "Backend latest.json" },
@@ -261,17 +261,11 @@ $vendorUrlProperty = Find-ManifestZipProperty `
     -Description "vendor"
 
 $backendUpdateSourceName = Get-UrlFilename -Url $backendUpdateUrlProperty.Value
-$vendorSourceName = Get-UrlFilename -Url $vendorUrlProperty.Value
 
 $backendUpdateSource = Find-SourceZip `
     -BackendRelease $backendRelease `
     -Filename $backendUpdateSourceName `
     -Description "Backend update ZIP"
-
-$vendorSource = Find-SourceZip `
-    -BackendRelease $backendRelease `
-    -Filename $vendorSourceName `
-    -Description "Vendor ZIP"
 
 # ---------------------------------------------------------------------------
 # 2. Define output layout and asset names.
@@ -292,12 +286,12 @@ $backendUpdatePath = Join-Path $versionPublishDir $backendUpdateName
 $vendorZipPath = Join-Path $versionPublishDir $vendorZipName
 $liteZipPath = Join-Path $versionPublishDir $liteZipName
 
-# Releases use the conventional v<DesktopVersion> tag.
-$releaseTag = "v$desktopVersion"
+# Desktop tags are distinct from backend v<version> tags.
+$releaseTag = "desktop-v$desktopVersion"
 $releaseDownloadBase = "https://github.com/$Repository/releases/download/$releaseTag"
 
 $fullDownloadUrl = "$releaseDownloadBase/$fullZipName"
-$desktopGuiDownloadUrl = "$releaseDownloadBase/$desktopGuiZipName"
+$desktopUpdateDownloadUrl = "$releaseDownloadBase/$desktopUpdateAssetName"
 $backendUpdateDownloadUrl = "$releaseDownloadBase/$backendUpdateName"
 $vendorDownloadUrl = "$releaseDownloadBase/$vendorZipName"
 $liteDownloadUrl = "$releaseDownloadBase/$liteZipName"
@@ -317,8 +311,8 @@ Write-Host ""
 # ---------------------------------------------------------------------------
 # 3. Assemble the runnable product folder.
 #
-# Preserve existing data\. Remove .tmp\ because the updater creates it when
-# needed. Never copy backend release\data into the product.
+# Preserve existing data\. Remove backend\.tmp\ because the updater creates it
+# when needed. Never copy backend release\data into the product.
 # ---------------------------------------------------------------------------
 
 Write-Host "Assembling product folder..."
@@ -328,18 +322,62 @@ New-Item -ItemType Directory -Path $productDir -Force | Out-Null
 Copy-Item -LiteralPath $desktopExe `
     -Destination (Join-Path $productDir $DesktopExeName) -Force
 
+if (-not (Test-Path -LiteralPath (Join-Path $productDir "config.toml"))) {
+    Copy-Item -LiteralPath $desktopConfig `
+        -Destination (Join-Path $productDir "config.toml") -Force
+}
+
+$productBackend = Join-Path $productDir $BackendDirectoryName
+$productPublic = Join-Path $productBackend "public"
+$productVendor = Join-Path $productBackend "vendor"
+$productMpv = Join-Path $productVendor $MpvDirectoryName
+$productTmp = Join-Path $productBackend ".tmp"
+$legacyProductTmp = Join-Path $productDir ".tmp"
+$legacyProductVersion = Join-Path $productDir "version.json"
+$legacyProductPublic = Join-Path $productDir "public"
+$legacyProductVendor = Join-Path $productDir "vendor"
+
+Remove-Item -LiteralPath $productPublic, $productVendor, $productTmp, `
+    $legacyProductPublic, $legacyProductVendor, $legacyProductTmp `
+    -Recurse -Force -ErrorAction SilentlyContinue
+
+if (Test-Path -LiteralPath $legacyProductVersion) {
+    Remove-Item -LiteralPath $legacyProductVersion -Force
+}
+
+New-Item -ItemType Directory -Path $productBackend -Force | Out-Null
+
+foreach ($fileName in @(
+    $PatcherExeName,
+    $CoreExeName,
+    "CypherSR.exe",
+    "CypherSR-core.exe"
+)) {
+    $staleBackendExe = Join-Path $productBackend $fileName
+
+    if (Test-Path -LiteralPath $staleBackendExe) {
+        Remove-Item -LiteralPath $staleBackendExe -Force
+    }
+}
+
 Copy-Item -LiteralPath $backendPatcher `
-    -Destination (Join-Path $productDir $PatcherExeName) -Force
+    -Destination (Join-Path $productBackend $PatcherExeName) -Force
 
 Copy-Item -LiteralPath $backendCore `
-    -Destination (Join-Path $productDir $CoreExeName) -Force
+    -Destination (Join-Path $productBackend $CoreExeName) -Force
 
-$productPublic = Join-Path $productDir "public"
-$productVendor = Join-Path $productDir "vendor"
-$productTmp = Join-Path $productDir ".tmp"
+foreach ($fileName in @(
+    $PatcherExeName,
+    $CoreExeName,
+    "CypherSR.exe",
+    "CypherSR-core.exe"
+)) {
+    $staleRootExe = Join-Path $productDir $fileName
 
-Remove-Item -LiteralPath $productPublic, $productVendor, $productTmp `
-    -Recurse -Force -ErrorAction SilentlyContinue
+    if (Test-Path -LiteralPath $staleRootExe) {
+        Remove-Item -LiteralPath $staleRootExe -Force
+    }
+}
 
 Copy-Item -LiteralPath $backendPublic `
     -Destination $productPublic -Recurse -Force
@@ -347,9 +385,12 @@ Copy-Item -LiteralPath $backendPublic `
 Copy-Item -LiteralPath $backendVendor `
     -Destination $productVendor -Recurse -Force
 
+Copy-Item -LiteralPath $mpvSource `
+    -Destination $productVendor -Recurse -Force
+
 # version.json describes the backend version, not the Desktop version.
 Write-Utf8NoBom `
-    -Path (Join-Path $productDir "version.json") `
+    -Path (Join-Path $productBackend "version.json") `
     -Content (@{ version = $backendVersion } | ConvertTo-Json)
 
 # ---------------------------------------------------------------------------
@@ -364,19 +405,16 @@ Remove-Item -LiteralPath $stageDir `
 New-Item -ItemType Directory -Path $stageDir -Force | Out-Null
 
 foreach ($fileName in @(
-    $DesktopExeName,
-    $PatcherExeName,
-    $CoreExeName,
-    "version.json"
+    $DesktopExeName
 )) {
     Copy-Item -LiteralPath (Join-Path $productDir $fileName) `
         -Destination $stageDir -Force
 }
 
-Copy-Item -LiteralPath $productPublic `
-    -Destination $stageDir -Recurse -Force
+Copy-Item -LiteralPath $desktopConfig `
+    -Destination (Join-Path $stageDir "config.toml") -Force
 
-Copy-Item -LiteralPath $productVendor `
+Copy-Item -LiteralPath $productBackend `
     -Destination $stageDir -Recurse -Force
 
 # ---------------------------------------------------------------------------
@@ -391,16 +429,49 @@ Remove-Item -LiteralPath $publishDir `
 
 New-Item -ItemType Directory -Path $versionPublishDir -Force | Out-Null
 
-# Copy the compressed GUI asset; do not publish a standalone GUI EXE.
+# Keep the ZIP for manual downloads and publish the executable separately for
+# the in-app updater, which verifies and replaces the running desktop EXE.
 Copy-Item -LiteralPath $desktopGuiZipSource `
     -Destination $desktopGuiZipPath -Force
+Copy-Item -LiteralPath $desktopExe `
+    -Destination (Join-Path $versionPublishDir $desktopUpdateAssetName) -Force
+Require-Path `
+    -Path (Join-Path $versionPublishDir $desktopUpdateAssetName) `
+    -Description "Desktop updater executable asset"
 
 # Rename the backend updater ZIP without changing its contents.
 Copy-Item -LiteralPath $backendUpdateSource `
     -Destination $backendUpdatePath -Force
 
-Copy-Item -LiteralPath $vendorSource `
-    -Destination $vendorZipPath -Force
+$vendorStageRoot = Join-Path $stageDir "vendor-package"
+$vendorStageDir = Join-Path $vendorStageRoot "vendor"
+$vendorZipTempPath = Join-Path $versionPublishDir ".tmp-$vendorZipName"
+
+New-Item -ItemType Directory -Path $vendorStageRoot -Force | Out-Null
+Copy-Item -LiteralPath $productVendor `
+    -Destination $vendorStageRoot -Recurse -Force
+
+try {
+    if (Test-Path -LiteralPath $vendorZipTempPath) {
+        Remove-Item -LiteralPath $vendorZipTempPath -Force
+    }
+
+    Compress-Archive `
+        -Path $vendorStageDir `
+        -DestinationPath $vendorZipTempPath `
+        -CompressionLevel Optimal `
+        -Force
+
+    Require-Path -Path $vendorZipTempPath -Description "Temporary vendor ZIP"
+
+    Move-Item -LiteralPath $vendorZipTempPath `
+        -Destination $vendorZipPath -Force
+}
+finally {
+    if (Test-Path -LiteralPath $vendorZipTempPath) {
+        Remove-Item -LiteralPath $vendorZipTempPath -Force
+    }
+}
 
 # Copy the standalone Lite package byte-for-byte.
 Copy-Item -LiteralPath $liteZipSource `
@@ -408,15 +479,27 @@ Copy-Item -LiteralPath $liteZipSource `
 
 # Create the full portable package.
 # The temporary filename still ends with .zip for Compress-Archive.
+# Create the full portable package with a parent folder.
 $fullZipTempPath = Join-Path $versionPublishDir ".tmp-$fullZipName"
+$fullStageRoot = Join-Path $stageDir $FullFolderName
 
 try {
     if (Test-Path -LiteralPath $fullZipTempPath) {
         Remove-Item -LiteralPath $fullZipTempPath -Force
     }
 
+    New-Item -ItemType Directory -Path $fullStageRoot -Force | Out-Null
+
+    foreach ($fileName in @($DesktopExeName, "config.toml")) {
+        Copy-Item -LiteralPath (Join-Path $stageDir $fileName) `
+            -Destination $fullStageRoot -Force
+    }
+
+    Copy-Item -LiteralPath (Join-Path $stageDir $BackendDirectoryName) `
+        -Destination $fullStageRoot -Recurse -Force
+
     Compress-Archive `
-        -Path (Join-Path $stageDir "*") `
+        -Path $fullStageRoot `
         -DestinationPath $fullZipTempPath `
         -CompressionLevel Optimal `
         -Force
@@ -433,6 +516,11 @@ finally {
 }
 
 Require-Path -Path $fullZipPath -Description "Full portable ZIP"
+Require-Path -Path (Join-Path $productBackend $PatcherExeName) -Description "Packaged backend patcher"
+Require-Path -Path (Join-Path $productBackend $CoreExeName) -Description "Packaged backend core"
+Require-Path -Path (Join-Path $productDir "config.toml") -Description "Packaged config.toml"
+Require-Path -Path (Join-Path $productMpv "mpv.exe") -Description "Packaged MPV executable"
+Require-Path -Path (Join-Path $productMpv "mpv-register.bat") -Description "Packaged MPV registration script"
 
 # ---------------------------------------------------------------------------
 # 6. Merge updater metadata.
@@ -441,7 +529,8 @@ Require-Path -Path $fullZipPath -Description "Full portable ZIP"
 # and vendor URLs to assets published under the Desktop release tag.
 # ---------------------------------------------------------------------------
 
-$desktopGuiHash = Get-Sha256 -Path $desktopGuiZipPath
+$desktopUpdateHash = Get-Sha256 `
+    -Path (Join-Path $versionPublishDir $desktopUpdateAssetName)
 $backendUpdateHash = Get-Sha256 -Path $backendUpdatePath
 $vendorHash = Get-Sha256 -Path $vendorZipPath
 $fullHash = Get-Sha256 -Path $fullZipPath
@@ -482,8 +571,8 @@ foreach ($property in $backendManifest.PSObject.Properties) {
 
 $desktopEntry = [PSCustomObject]@{
     version = $desktopVersion
-    url     = $desktopGuiDownloadUrl
-    sha256  = $desktopGuiHash
+    url     = $desktopUpdateDownloadUrl
+    sha256  = $desktopUpdateHash
 }
 
 $fullEntry = [PSCustomObject]@{
@@ -522,32 +611,12 @@ Copy-Item -LiteralPath $manifestOutput `
 # ---------------------------------------------------------------------------
 # 7. Validate generated files and archive contents.
 # ---------------------------------------------------------------------------
-
-foreach ($path in @(
-    (Join-Path $productDir $DesktopExeName),
-    (Join-Path $productDir $PatcherExeName),
-    (Join-Path $productDir $CoreExeName),
-    (Join-Path $productDir "version.json"),
-    (Join-Path $productDir "public\player.html"),
-    (Join-Path $productDir "vendor\vendor-version.json"),
-    (Join-Path $productDir "vendor\yt-dlp.exe"),
-    (Join-Path $productDir "vendor\ffmpeg\bin\ffmpeg.exe"),
-    $fullZipPath,
-    $desktopGuiZipPath,
-    $backendUpdatePath,
-    $vendorZipPath,
-    $liteZipPath,
-    $manifestOutput,
-    $backendManifestPath
-)) {
-    Require-Path -Path $path -Description "Release output"
-}
-
 if (Test-Path -LiteralPath $productTmp) {
     throw "The product folder must not contain .tmp."
 }
 
-# Ensure the full ZIP contains no data\ or .tmp\ entries.
+# Ensure the full ZIP contains no data\ or .tmp\ entries,
+# and that all expected files are inside the parent folder.
 $fullArchive = [System.IO.Compression.ZipFile]::OpenRead($fullZipPath)
 
 try {
@@ -557,29 +626,84 @@ try {
         }
     )
 
+    # The full ZIP must not contain persistent data or temporary files.
     foreach ($entryName in $fullEntries) {
-        if ($entryName -match '^(data|\.tmp)(/|$)') {
+        if ($entryName -match '(^|/)(data|\.tmp)(/|$)') {
             throw "Forbidden path found in full ZIP: $entryName"
         }
     }
 
+    # All files must be inside the "CypherSR Desktop" folder.
+    $archiveRoot = "CypherSR Desktop/"
+
     foreach ($expectedEntry in @(
-        $DesktopExeName,
-        $PatcherExeName,
-        $CoreExeName,
-        "version.json",
-        "public/player.html",
-        "vendor/vendor-version.json",
-        "vendor/yt-dlp.exe",
-        "vendor/ffmpeg/bin/ffmpeg.exe"
+        "${archiveRoot}$DesktopExeName",
+        "${archiveRoot}config.toml",
+        "${archiveRoot}${BackendDirectoryName}/$PatcherExeName",
+        "${archiveRoot}${BackendDirectoryName}/$CoreExeName",
+        "${archiveRoot}${BackendDirectoryName}/version.json",
+        "${archiveRoot}${BackendDirectoryName}/public/player.html",
+        "${archiveRoot}${BackendDirectoryName}/vendor/vendor-version.json",
+        "${archiveRoot}${BackendDirectoryName}/vendor/yt-dlp.exe",
+        "${archiveRoot}${BackendDirectoryName}/vendor/ffmpeg/bin/ffmpeg.exe",
+        "${archiveRoot}${BackendDirectoryName}/vendor/mpv/mpv.exe",
+        "${archiveRoot}${BackendDirectoryName}/vendor/mpv/mpv-register.bat"
     )) {
         if ($fullEntries -notcontains $expectedEntry) {
             throw "Expected file missing from full ZIP: $expectedEntry"
         }
     }
+
+    # Ensure no files are accidentally exposed at the ZIP root.
+    foreach ($entryName in $fullEntries) {
+        if (
+            -not $entryName.StartsWith($archiveRoot) -and
+            -not [string]::IsNullOrEmpty(
+                [System.IO.Path]::GetFileName($entryName)
+            )
+        ) {
+            throw "Unexpected file outside '$archiveRoot': $entryName"
+        }
+    }
 }
 finally {
     $fullArchive.Dispose()
+}
+
+$vendorArchive = [System.IO.Compression.ZipFile]::OpenRead($vendorZipPath)
+
+try {
+    $vendorEntries = @(
+        $vendorArchive.Entries | ForEach-Object {
+            $_.FullName.Replace("\", "/")
+        }
+    )
+
+    foreach ($expectedEntry in @(
+        "vendor/vendor-version.json",
+        "vendor/yt-dlp.exe",
+        "vendor/ffmpeg/bin/ffmpeg.exe",
+        "vendor/mpv/mpv.exe",
+        "vendor/mpv/mpv-register.bat"
+    )) {
+        if ($vendorEntries -notcontains $expectedEntry) {
+            throw "Expected file missing from vendor ZIP: $expectedEntry"
+        }
+    }
+
+    foreach ($entryName in $vendorEntries) {
+        if (
+            -not $entryName.StartsWith("vendor/") -and
+            -not [string]::IsNullOrEmpty(
+                [System.IO.Path]::GetFileName($entryName)
+            )
+        ) {
+            throw "Unexpected file outside 'vendor/': $entryName"
+        }
+    }
+}
+finally {
+    $vendorArchive.Dispose()
 }
 
 # Confirm the merged manifest matches the generated assets.
@@ -588,8 +712,8 @@ $verifiedManifest = Get-Content -LiteralPath $manifestOutput -Raw |
 
 if (
     [string]$verifiedManifest.desktop.version -ne $desktopVersion -or
-    [string]$verifiedManifest.desktop.url -ne $desktopGuiDownloadUrl -or
-    [string]$verifiedManifest.desktop.sha256 -ne $desktopGuiHash -or
+    [string]$verifiedManifest.desktop.url -ne $desktopUpdateDownloadUrl -or
+    [string]$verifiedManifest.desktop.sha256 -ne $desktopUpdateHash -or
 
     [string]$verifiedManifest.full.version -ne $desktopVersion -or
     [string]$verifiedManifest.full.url -ne $fullDownloadUrl -or
@@ -624,9 +748,9 @@ Write-Host "Backend updater:  $backendUpdateName"
 Write-Host "Vendor package:   $vendorZipName"
 Write-Host "Lite package:     $liteZipName"
 Write-Host ""
-Write-Host "Desktop GUI standalone EXE is not published."
+Write-Host "Desktop update EXE: $desktopUpdateAssetName"
 Write-Host "Product data\ was preserved."
-Write-Host "Product .tmp\ was removed."
+Write-Host "Product backend\.tmp\ was removed."
 Write-Host "Full ZIP excludes data\ and .tmp\."
 Write-Host "Backend release\data was not copied."
 Write-Host "Lite ZIP was copied unchanged."

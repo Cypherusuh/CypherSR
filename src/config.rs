@@ -70,7 +70,7 @@ impl Default for PlaybackConfig {
             max_video_height: 240,
             media_dir: String::new(),
             ffmpeg_path: String::new(),
-            mpv_path: "resources/mpv/mpv.exe".into(),
+            mpv_path: "backend/vendor/mpv/mpv.exe".into(),
             yt_dlp_path: "yt-dlp".into(),
             radio_url: String::new(),
         }
@@ -108,7 +108,30 @@ impl AppConfig {
         }
 
         let contents = fs::read_to_string(&path)?;
-        let config: Self = toml::from_str(&contents)?;
+        let mut config: Self = toml::from_str(&contents)?;
+
+        let bundled_mpv_exists = path
+            .parent()
+            .is_some_and(|directory| {
+                directory
+                    .join("backend")
+                    .join("vendor")
+                    .join("mpv")
+                    .join("mpv.exe")
+                    .is_file()
+            });
+
+        if bundled_mpv_exists
+            && [
+            "resources/mpv/mpv.exe",
+            "vendor/mpv/mpv.exe",
+        ]
+        .iter()
+        .any(|legacy_path| config.playback.mpv_path.eq_ignore_ascii_case(legacy_path))
+        {
+            config.playback.mpv_path = "backend/vendor/mpv/mpv.exe".into();
+            config.save()?;
+        }
 
         config.validate()?;
 
@@ -174,5 +197,21 @@ impl AppConfig {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AppConfig;
+
+    #[test]
+    fn packaged_config_uses_the_bundled_mpv_path() {
+        let config: AppConfig = toml::from_str(include_str!("../config.toml"))
+            .expect("packaged config.toml should be valid");
+
+        assert_eq!(config.playback.mpv_path, "backend/vendor/mpv/mpv.exe");
+        config
+            .validate()
+            .expect("packaged defaults should be valid");
     }
 }

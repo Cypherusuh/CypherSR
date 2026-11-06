@@ -55,9 +55,11 @@ use video_preview::{native_window_handle, VideoPreviewController};
 slint::include_modules!();
 
 const VIDEO_SYNC_INTERVAL: Duration = Duration::from_millis(100);
-const PATCHER_EXE: &str = "CypherSR.exe";
+const PATCHER_EXE: &str = "Cypher-Updater.exe";
+const BACKEND_DIRECTORY: &str = "backend";
 const DATA_DIRECTORY: &str = "data";
 const SONG_REQUEST_HOME_ENV: &str = "SONG_REQUEST_HOME";
+const SONG_REQUEST_RUNTIME_HOME_ENV: &str = "SONG_REQUEST_RUNTIME_HOME";
 
 type PlayerControlRequest = (String, Option<f64>);
 
@@ -99,6 +101,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if desktop_updater::check_and_apply_update() {
         // PowerShell is waiting for this process to exit before replacing the EXE.
         return Ok(());
+    }
+
+    if let Err(error) = register_bundled_mpv_if_needed() {
+        show_error_dialog(&format!(
+            "Could not register the bundled MPV installation:\n\n{error}"
+        ));
+
+        return Err(error.into());
     }
 
     // Only the instance holding the mutex can reach this point.
@@ -154,6 +164,97 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+fn register_bundled_mpv_if_needed() -> Result<(), Box<dyn std::error::Error>> {
+    let executable = std::env::current_exe()?;
+    let app_dir = executable
+        .parent()
+        .ok_or_else(|| io::Error::other("Could not determine the desktop executable directory"))?;
+    let backend_mpv_dir = app_dir
+        .join(BACKEND_DIRECTORY)
+        .join("vendor")
+        .join("mpv");
+    let legacy_mpv_dir = app_dir.join("vendor").join("mpv");
+    let mpv_dir = if backend_mpv_dir.join("mpv.exe").is_file() {
+        backend_mpv_dir
+    } else {
+        legacy_mpv_dir
+    };
+    let mpv_executable = mpv_dir.join("mpv.exe");
+    let register_script = mpv_dir.join("mpv-register.bat");
+
+    if !mpv_executable.exists() && !register_script.exists() {
+        println!("[MPV] No bundled MPV found; skipping registration.");
+        return Ok(());
+    }
+
+    for path in [&mpv_executable, &register_script] {
+        if !path.is_file() {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("Bundled MPV file was not found: {}", path.display()),
+            )
+            .into());
+        }
+    }
+
+    let data_dir = app_dir.join(DATA_DIRECTORY);
+    std::fs::create_dir_all(&data_dir)?;
+
+    let registration_marker = data_dir.join("mpv-registration-path.txt");
+    let mpv_path = mpv_executable.to_string_lossy();
+    let previous_registration = match std::fs::read_to_string(&registration_marker) {
+        Ok(path) => Some(path),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error.into()),
+    };
+
+    if previous_registration
+        .as_deref()
+        .map(str::trim)
+        .is_some_and(|path| path.eq_ignore_ascii_case(&mpv_path))
+    {
+        return Ok(());
+    }
+
+    let output = Command::new("cmd.exe")
+        .args(["/D", "/C"])
+        .arg(&register_script)
+        .current_dir(&mpv_dir)
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .map_err(|error| {
+            io::Error::new(
+                error.kind(),
+                format!(
+                    "Could not run MPV registration script {}: {error}",
+                    register_script.display()
+                ),
+            )
+        })?;
+
+    if !output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let details = [stdout.trim(), stderr.trim()]
+            .into_iter()
+            .filter(|text| !text.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        return Err(io::Error::other(format!(
+            "MPV registration script exited with {}.\n{}",
+            output.status,
+            details
+        ))
+        .into());
+    }
+
+    std::fs::write(&registration_marker, mpv_path.as_bytes())?;
+    println!("[MPV] Registered {}", mpv_executable.display());
+
+    Ok(())
+}
+
 const SINGLE_INSTANCE_MUTEX: &str = "Local\\CypherSR.Desktop.SingleInstance";
 
 fn acquire_single_instance() -> std::io::Result<OwnedHandle> {
@@ -194,15 +295,21 @@ fn acquire_single_instance() -> std::io::Result<OwnedHandle> {
     })
 }
 
-/// Launches CypherSR.exe from the same directory as the desktop executable.
+/// Launches Cypher-Updater.exe from the backend directory.
 fn launch_backend_patcher() -> Result<BackendPatcher, Box<dyn std::error::Error>> {
     let executable = std::env::current_exe()?;
 
-    let bundle_dir = executable.parent().ok_or_else(|| {
+    let app_dir = executable.parent().ok_or_else(|| {
         io::Error::other("Could not determine the desktop executable directory")
     })?;
 
-    let patcher_path = bundle_dir.join(PATCHER_EXE);
+    let backend_dir = app_dir.join(BACKEND_DIRECTORY);
+    let bundled_patcher = backend_dir.join(PATCHER_EXE);
+    let (patcher_path, runtime_dir) = if bundled_patcher.is_file() {
+        (bundled_patcher, backend_dir)
+    } else {
+        (app_dir.join("CypherSR.exe"), app_dir.to_path_buf())
+    };
 
     if !patcher_path.is_file() {
         return Err(io::Error::new(
@@ -215,8 +322,8 @@ fn launch_backend_patcher() -> Result<BackendPatcher, Box<dyn std::error::Error>
         .into());
     }
 
-    // Persistent portable data lives beside the executables.
-    let data_dir = bundle_dir.join(DATA_DIRECTORY);
+    // Persistent portable data remains beside the Desktop executable.
+    let data_dir = app_dir.join(DATA_DIRECTORY);
     std::fs::create_dir_all(&data_dir).map_err(|error| {
         io::Error::new(
             error.kind(),
@@ -275,10 +382,11 @@ fn launch_backend_patcher() -> Result<BackendPatcher, Box<dyn std::error::Error>
     // Start suspended so the updater cannot spawn the core before being
     // assigned to the Job Object.
     let mut child = Command::new(&patcher_path)
-    .current_dir(bundle_dir)
-    .env(SONG_REQUEST_HOME_ENV, &data_dir)
-    .creation_flags(CREATE_SUSPENDED | CREATE_NO_WINDOW)
-    .spawn()
+        .current_dir(&runtime_dir)
+        .env(SONG_REQUEST_HOME_ENV, &data_dir)
+        .env(SONG_REQUEST_RUNTIME_HOME_ENV, &runtime_dir)
+        .creation_flags(CREATE_SUSPENDED | CREATE_NO_WINDOW)
+        .spawn()
         .map_err(|error| {
             io::Error::new(
                 error.kind(),
