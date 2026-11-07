@@ -2,6 +2,7 @@ import {
     TwitchClient as TwitchConnectorClient,
     type TwitchTokenStore,
 } from 'streamops-twitch-connector';
+import { exec, execFile } from 'node:child_process';
 
 import type { ChatMessage } from '../commands/types.js';
 import type { TwitchClient as TwitchClientInterface } from './types.js';
@@ -78,10 +79,18 @@ export class TwitchClient implements TwitchClientInterface {
             `[Twitch] Code expires in ${Math.floor(login.expiresIn / 60)} minutes.`,
         );
 
-        await import('node:child_process').then(({ exec }) => {
+        if (process.platform === 'win32') {
             const url = login.verificationUri.replace(/"/g, '');
             exec(`start "" "${url}"`);
-        });
+        } else if (process.platform === 'linux') {
+            execFile('xdg-open', [login.verificationUri], (error) => {
+                if (error) {
+                    console.warn(
+                        '[Twitch] Could not open the verification page automatically. Open the URL printed above.',
+                    );
+                }
+            });
+        }
 
         await this.client.tokens.completeLogin();
 

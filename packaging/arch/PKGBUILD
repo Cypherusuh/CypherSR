@@ -1,0 +1,48 @@
+# Maintainer: CypherSR contributors
+pkgname=cyphersr-backend
+pkgver=1.2.1
+pkgrel=1
+pkgdesc='Twitch song-request backend and CLI'
+arch=('x86_64')
+url='https://github.com/Cypherusuh/CypherSR'
+license=('Apache-2.0')
+depends=('nodejs>=22' 'yt-dlp' 'ffmpeg')
+makedepends=('npm')
+provides=('cyphersr-backend')
+
+# Pin the source to a released commit before publishing this recipe to the AUR.
+source=(
+  "CypherSR::git+https://github.com/Cypherusuh/CypherSR.git#commit=b0923446f966838840b601b66e7207e7e4b9ff77"
+  'cyphersr-backend'
+)
+sha256sums=(
+  'SKIP'
+  'SKIP'
+)
+
+build() {
+  cd "${srcdir}/CypherSR"
+
+  npm ci
+  npm run build
+  npm prune --omit=dev
+}
+
+package() {
+  local appdir="${pkgdir}/usr/lib/cyphersr"
+  local licensedir="${pkgdir}/usr/share/licenses/${pkgname}"
+
+  install -d "${appdir}"
+  cp -a "${srcdir}/CypherSR/dist" "${appdir}/"
+  cp -a "${srcdir}/CypherSR/node_modules" "${appdir}/"
+  cp -a "${srcdir}/CypherSR/public" "${appdir}/"
+  install -Dm644 "${srcdir}/CypherSR/package.json" "${appdir}/package.json"
+  install -Dm755 "${srcdir}/packaging/arch/cyphersr-backend" \
+    "${pkgdir}/usr/bin/cyphersr-backend"
+
+  install -d "${licensedir}"
+  install -Dm644 "${srcdir}/CypherSR/LICENCE" \
+    "${licensedir}/LICENSE-CypherSR"
+  install -Dm644 "${srcdir}/CypherSR/NOTICE" \
+    "${licensedir}/NOTICE-CypherSR"
+}

@@ -10,6 +10,7 @@ import { dirname } from 'node:path';
 
 import type { SongRequestConfig } from './types.js';
 import { dataPath, runtimePath } from './runtime-paths.js';
+import { defaultToolPaths } from './tool-paths.js';
 
 const DEFAULT_TWITCH_CLIENT_ID = 'leq7ln0qrqwvdxkrr8qtqmnxz412k8';
 
@@ -199,6 +200,7 @@ function positiveIntegerEnv(name: string, fallback: number): number {
 
 export function loadConfig(): SongRequestConfig {
   const stored = readPersistedConfig();
+  const defaultTools = defaultToolPaths(process.platform);
 
   const spotifyClientId = optionalEnv('SPOTIFY_CLIENT_ID');
   const spotifyClientSecret = optionalEnv('SPOTIFY_CLIENT_SECRET');
@@ -251,10 +253,10 @@ export function loadConfig(): SongRequestConfig {
       radioUrl: optionalEnv('RADIO_URL'),
       mpvPath: runtimePath(optionalEnv('MPV_PATH') || 'mpv'),
       ytDlpPath: runtimePath(
-        optionalEnv('YT_DLP_PATH') || 'vendor/yt-dlp.exe',
+        optionalEnv('YT_DLP_PATH') || defaultTools.ytDlpPath,
       ),
       ffmpegPath: runtimePath(
-        optionalEnv('FFMPEG_PATH') || 'vendor/ffmpeg/bin/ffmpeg.exe',
+        optionalEnv('FFMPEG_PATH') || defaultTools.ffmpegPath,
       ),
       mediaDir: process.env.SONG_REQUEST_MEDIA_DIR?.trim()
         ? runtimePath(process.env.SONG_REQUEST_MEDIA_DIR.trim())

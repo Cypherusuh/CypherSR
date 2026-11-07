@@ -1,0 +1,12 @@
+#!/bin/sh
+set -eu
+
+app_dir=/usr/lib/cyphersr
+data_home=${XDG_DATA_HOME:-"$HOME/.local/share"}
+
+export SONG_REQUEST_RUNTIME_HOME="${SONG_REQUEST_RUNTIME_HOME:-$app_dir}"
+export SONG_REQUEST_HOME="${SONG_REQUEST_HOME:-$data_home/cyphersr}"
+export YT_DLP_PATH="${YT_DLP_PATH:-/usr/bin/yt-dlp}"
+export FFMPEG_PATH="${FFMPEG_PATH:-/usr/bin/ffmpeg}"
+
+exec /usr/bin/node "$app_dir/dist/main.js" "$@"

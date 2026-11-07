@@ -5,10 +5,12 @@ import { isSea } from 'node:sea';
 const configuredRuntimeHome = process.env.SONG_REQUEST_RUNTIME_HOME?.trim();
 
 function getAppDirectory(): string {
+  if (configuredRuntimeHome) {
+    return resolve(configuredRuntimeHome);
+  }
+
   if (isSea()) {
-    return configuredRuntimeHome
-      ? resolve(configuredRuntimeHome)
-      : dirname(process.execPath);
+    return dirname(process.execPath);
   }
 
   // Development builds are launched from the project root.

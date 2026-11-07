@@ -119,6 +119,26 @@ For a standalone backend release, upload the ZIPs from `Publishing zip\` and
 `latest.json` from `Backend Build\`. `Published App\` is the ready-to-run
 portable package.
 
+## Linux backend package (Arch/EndeavourOS)
+
+The backend-only Arch package can be built with `makepkg` from
+`packaging/arch\`. It is designed for Arch Linux and Arch-based distributions
+such as EndeavourOS; the Windows desktop app is not included.
+
+The package uses Arch's `yt-dlp` and `ffmpeg` packages, installs the backend
+under `/usr/lib/cyphersr/`, and keeps runtime data under
+`~/.local/share/cyphersr/`. From an Arch-based system with the repository
+checked out:
+
+```sh
+cd packaging/arch
+makepkg -si
+```
+
+Run the backend with `cyphersr-backend`. The package recipe is an initial
+in-repository build recipe; pin its source to a released commit before
+publishing it to the AUR.
+
 ## Support
 
 Found a bug or have a suggestion? [Open an issue](https://github.com/Cypherusuh/CypherSR/issues).
