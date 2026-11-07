@@ -305,8 +305,8 @@ $backendUpdatePath = Join-Path $publishingZipDir $backendUpdateName
 $vendorZipPath = Join-Path $publishingZipDir $vendorZipName
 $liteZipPath = Join-Path $publishingZipDir $liteZipName
 
-# Desktop tags are distinct from backend v<version> tags.
-$releaseTag = "desktop-v$desktopVersion"
+# Combined Desktop and backend releases use the same v<version> tag.
+$releaseTag = "v$desktopVersion"
 $releaseDownloadBase = "https://github.com/$Repository/releases/download/$releaseTag"
 
 $fullDownloadUrl = "$releaseDownloadBase/$fullZipName"
@@ -783,5 +783,8 @@ Write-Host "Backend release\data was not copied."
 Write-Host "Lite ZIP was copied unchanged."
 Write-Host ""
 Write-Host "GitHub release tag: $releaseTag"
-Write-Host "Review the release assets before publishing."
+Write-Host "Upload every file from $publishingZipDir and:"
+Write-Host "  $(Join-Path $desktopRelease $desktopUpdateAssetName)"
+Write-Host "Mark the combined release as the latest release."
+Write-Host "Then run .\scripts\verify-release.ps1 before announcing it."
 Write-Host "============================================"

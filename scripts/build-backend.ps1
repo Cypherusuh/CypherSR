@@ -68,9 +68,7 @@ $versioning = Join-Path $versionRoot "versioning"
 #   CypherSR-Backend-Update-v{BackendVersion}-win-x64.zip
 #   vendor-{VendorVersion}-win-x64.zip
 #
-# When these assets are also published in a Desktop release, the
-# Desktop publisher should update the merged manifest URLs to use
-# that Desktop release's tag.
+# Combined Desktop releases use the same v{BackendVersion} tag and asset URLs.
 $updateAssetName = "CypherSR-Backend-Update-v$appVersion-win-x64.zip"
 $vendorAssetName = "vendor-$vendorVersion-win-x64.zip"
 $fullAssetName = "CypherSR-Lite-v$appVersion-win-x64.zip"

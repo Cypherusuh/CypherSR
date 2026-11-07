@@ -82,10 +82,10 @@ connectivity and playback status.
 
 The desktop app and backend share the `version` in the repository-root
 `app-version.json`; bundled vendor tools use its independent `vendorVersion`.
-Desktop releases use `desktop-vX.Y.Z` tags and a versioned desktop executable
-asset, while backend releases use `vX.Y.Z` tags. The desktop updater searches
-stable releases for the newest desktop executable instead of assuming the
-repository's single latest release is a desktop release.
+Combined Desktop and backend releases use `vX.Y.Z` tags. The desktop updater
+searches stable releases for the highest-version desktop executable asset named
+`CypherSR-Desktop-GUI-vX.Y.Z-win-x64.exe`, rather than assuming the
+repository's latest release is a desktop release.
 
 All components are built from this monorepo. The current release endpoints use
 `Cypherusuh/CypherSR`; changing repositories requires updating the publishers

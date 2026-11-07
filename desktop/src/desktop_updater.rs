@@ -16,6 +16,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 // because backend releases use the same repository but independent versions.
 const RELEASE_API_URL: &str =
     "https://api.github.com/repos/Cypherusuh/CypherSR/releases";
+const REPOSITORY: &str = "Cypherusuh/CypherSR";
 
 // Release asset naming convention.
 const DESKTOP_ASSET_PREFIX: &str = "CypherSR-Desktop-GUI-v";
@@ -84,9 +85,12 @@ pub fn check_and_apply_update() -> bool {
     {
         Ok(client) => client,
         Err(error) => {
-            eprintln!(
-                "[DesktopUpdate] Could not create HTTP client: {error}"
+            let message = format!(
+                "Could not check for Desktop updates. \
+                 CypherSR will continue with the installed version.\n\n{error}"
             );
+            eprintln!("[DesktopUpdate] {message}");
+            show_error(&message);
             return false;
         }
     };
@@ -95,9 +99,12 @@ pub fn check_and_apply_update() -> bool {
     let manifest = match fetch_latest_desktop_release(&client) {
         Ok(manifest) => manifest,
         Err(error) => {
-            eprintln!(
-                "[DesktopUpdate] Could not check for updates: {error}"
+            let message = format!(
+                "Could not check for Desktop updates. \
+                 CypherSR will continue with the installed version.\n\n{error}"
             );
+            eprintln!("[DesktopUpdate] {message}");
+            show_error(&message);
             return false;
         }
     };
@@ -159,6 +166,7 @@ fn fetch_latest_desktop_release(
     println!("[DesktopUpdate] Searching stable releases for the latest desktop asset...");
 
     let mut page = 1_u32;
+    let mut all_releases = Vec::new();
 
     loop {
         let page_query = page.to_string();
@@ -170,98 +178,156 @@ fn fetch_latest_desktop_release(
             .send()?
             .error_for_status()?;
 
-        let releases: Vec<GitHubRelease> = response.json()?;
-        if releases.is_empty() {
+        let page_releases: Vec<GitHubRelease> = response.json()?;
+        if page_releases.is_empty() {
             break;
         }
 
-        for release in releases.iter().filter(|release| !release.prerelease) {
-            let mut matching_assets = release.assets.iter().filter_map(|asset| {
-                let version = asset
-                    .name
-                    .strip_prefix(DESKTOP_ASSET_PREFIX)?
-                    .strip_suffix(DESKTOP_ASSET_SUFFIX)?;
-
-                Some((asset, version))
-            });
-
-            let Some((asset, version)) = matching_assets.next() else {
-                continue;
-            };
-
-            if matching_assets.next().is_some() {
-                return Err(io::Error::other(format!(
-                    "Multiple desktop executable assets were found in release {}.",
-                    release.tag_name
-                ))
-                .into());
-            }
-
-            if parse_version(version).is_none() {
-                return Err(io::Error::other(format!(
-                    "Invalid desktop version in release asset: {}",
-                    asset.name
-                ))
-                .into());
-            }
-
-            let sha256 = asset
-                .digest
-                .as_deref()
-                .and_then(|digest| digest.strip_prefix("sha256:"))
-                .ok_or_else(|| {
-                    io::Error::other(format!(
-                        "GitHub did not provide a SHA-256 digest for {}",
-                        asset.name
-                    ))
-                })?
-                .to_string();
-
-            if sha256.len() != 64
-                || !sha256.bytes().all(|byte| byte.is_ascii_hexdigit())
-            {
-                return Err(io::Error::other(format!(
-                    "Invalid SHA-256 digest returned for {}",
-                    asset.name
-                ))
-                .into());
-            }
-
-            let download_url = reqwest::Url::parse(&asset.browser_download_url)?;
-            if download_url.scheme() != "https"
-                || download_url.host_str() != Some("github.com")
-            {
-                return Err(io::Error::other(format!(
-                    "Unexpected download URL: {}",
-                    asset.browser_download_url
-                ))
-                .into());
-            }
-
-            println!(
-                "[DesktopUpdate] Found desktop asset {} in release {}.",
-                asset.name, release.tag_name
-            );
-
-            return Ok(DesktopUpdateManifest {
-                version: version.to_string(),
-                release_tag: release.tag_name.clone(),
-                url: asset.browser_download_url.clone(),
-                sha256,
-                size: asset.size,
-            });
-        }
+        all_releases.extend(page_releases);
 
         page = page
             .checked_add(1)
             .ok_or_else(|| io::Error::other("GitHub release page number overflow"))?;
     }
 
-    Err(io::Error::other(format!(
-        "No stable release contains a desktop executable named \
-         {DESKTOP_ASSET_PREFIX}<version>{DESKTOP_ASSET_SUFFIX}."
-    ))
-    .into())
+    select_latest_desktop_release(&all_releases)
+}
+
+fn select_latest_desktop_release(
+    releases: &[GitHubRelease],
+) -> Result<DesktopUpdateManifest, Box<dyn std::error::Error>> {
+    let mut latest: Option<DesktopUpdateManifest> = None;
+    let mut malformed_assets = Vec::new();
+
+    for release in releases.iter().filter(|release| !release.prerelease) {
+        let mut matching_assets = Vec::new();
+
+        for asset in &release.assets {
+            let Some(name) = asset.name.strip_prefix(DESKTOP_ASSET_PREFIX) else {
+                continue;
+            };
+
+            if let Some(version) = name.strip_suffix(DESKTOP_ASSET_SUFFIX) {
+                matching_assets.push((asset, version));
+            } else if name.to_ascii_lowercase().ends_with(".exe") {
+                if let Some(version) = name
+                    .split_once("-win-")
+                    .and_then(|(version, _)| parse_version(version))
+                {
+                    malformed_assets.push((version, asset.name.as_str()));
+                }
+            }
+        }
+
+        let Some((asset, version)) = matching_assets.first().copied() else {
+            continue;
+        };
+
+        if matching_assets.len() > 1 {
+            return Err(io::Error::other(format!(
+                "Multiple desktop executable assets were found in release {}.",
+                release.tag_name
+            ))
+            .into());
+        }
+
+        let parsed_version = parse_version(version).ok_or_else(|| {
+            io::Error::other(format!(
+                "Invalid desktop version in release asset: {}",
+                asset.name
+            ))
+        })?;
+
+        let sha256 = asset
+            .digest
+            .as_deref()
+            .and_then(|digest| digest.strip_prefix("sha256:"))
+            .ok_or_else(|| {
+                io::Error::other(format!(
+                    "GitHub did not provide a SHA-256 digest for {}",
+                    asset.name
+                ))
+            })?
+            .to_string();
+
+        if sha256.len() != 64 || !sha256.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err(io::Error::other(format!(
+                "Invalid SHA-256 digest returned for {}",
+                asset.name
+            ))
+            .into());
+        }
+
+        let download_url = reqwest::Url::parse(&asset.browser_download_url)?;
+        let expected_path = format!(
+            "/{REPOSITORY}/releases/download/{}/{}",
+            release.tag_name, asset.name
+        );
+        if download_url.scheme() != "https"
+            || download_url.host_str() != Some("github.com")
+            || download_url.port().is_some()
+            || download_url.username() != ""
+            || download_url.password().is_some()
+            || download_url.path() != expected_path
+            || download_url.query().is_some()
+            || download_url.fragment().is_some()
+        {
+            return Err(io::Error::other(format!(
+                "Unexpected download URL for {}: {}",
+                asset.name, asset.browser_download_url
+            ))
+            .into());
+        }
+
+        let candidate = DesktopUpdateManifest {
+            version: version.to_string(),
+            release_tag: release.tag_name.clone(),
+            url: asset.browser_download_url.clone(),
+            sha256,
+            size: asset.size,
+        };
+
+        match latest.as_ref() {
+            Some(current) => match parsed_version.cmp(
+                &parse_version(&current.version)
+                    .ok_or_else(|| io::Error::other("Invalid selected desktop version"))?,
+            ) {
+                std::cmp::Ordering::Greater => latest = Some(candidate),
+                std::cmp::Ordering::Equal | std::cmp::Ordering::Less => {}
+            },
+            None => latest = Some(candidate),
+        }
+    }
+
+    if let Some(current) = latest.as_ref() {
+        let latest_version = parse_version(&current.version)
+            .ok_or_else(|| io::Error::other("Invalid selected desktop version"))?;
+        if let Some((_, asset_name)) = malformed_assets
+            .iter()
+            .filter(|(version, _)| *version >= latest_version)
+            .max_by_key(|(version, _)| *version)
+        {
+            return Err(io::Error::other(format!(
+                "A newer Desktop release has a misnamed updater asset: {asset_name}. \
+                 Expected {DESKTOP_ASSET_PREFIX}<version>{DESKTOP_ASSET_SUFFIX}."
+            ))
+            .into());
+        }
+    } else if let Some((_, asset_name)) = malformed_assets.first() {
+        return Err(io::Error::other(format!(
+            "Desktop updater asset is misnamed: {asset_name}. \
+             Expected {DESKTOP_ASSET_PREFIX}<version>{DESKTOP_ASSET_SUFFIX}."
+        ))
+        .into());
+    }
+
+    latest.ok_or_else(|| {
+        io::Error::other(format!(
+            "No stable release contains a desktop executable named \
+             {DESKTOP_ASSET_PREFIX}<version>{DESKTOP_ASSET_SUFFIX}."
+        ))
+        .into()
+    })
 }
 
 // ------------------------------------------------------------
@@ -594,4 +660,70 @@ fn show_error(message: &str) {
 
 fn to_wide(value: &str) -> Vec<u16> {
     value.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn release(tag: &str, version: &str, prerelease: bool) -> GitHubRelease {
+        let asset_name = format!("{DESKTOP_ASSET_PREFIX}{version}{DESKTOP_ASSET_SUFFIX}");
+
+        GitHubRelease {
+            tag_name: tag.to_string(),
+            prerelease,
+            assets: vec![GitHubReleaseAsset {
+                browser_download_url: format!(
+                    "https://github.com/{REPOSITORY}/releases/download/{tag}/{asset_name}"
+                ),
+                name: asset_name,
+                digest: Some(format!("sha256:{}", "a".repeat(64))),
+                size: 1024,
+            }],
+        }
+    }
+
+    #[test]
+    fn selects_highest_desktop_version_independent_of_release_order() {
+        let releases = [
+            release("v1.0.2", "1.0.2", false),
+            release("v1.2.1", "1.2.1", false),
+            release("v9.0.0-rc1", "9.0.0", true),
+        ];
+
+        let update = select_latest_desktop_release(&releases).unwrap();
+
+        assert_eq!(update.version, "1.2.1");
+        assert_eq!(update.release_tag, "v1.2.1");
+    }
+
+    #[test]
+    fn rejects_release_without_exact_updater_exe_asset_name() {
+        let mut release = release("v1.2.1", "1.2.1", false);
+        release.assets[0].name = "CypherSR-Desktop-GUI-v1.2.1-win-x6.exe".to_string();
+
+        assert!(select_latest_desktop_release(&[release]).is_err());
+    }
+
+    #[test]
+    fn reports_newer_misnamed_asset_instead_of_silently_using_old_release() {
+        let valid = release("v1.0.2", "1.0.2", false);
+        let mut malformed = release("v1.2.1", "1.2.1", false);
+        malformed.assets[0].name = "CypherSR-Desktop-GUI-v1.2.1-win-x6.exe".to_string();
+
+        let error = select_latest_desktop_release(&[valid, malformed]).unwrap_err();
+
+        assert!(error.to_string().contains("misnamed updater asset"));
+    }
+
+    #[test]
+    fn valid_new_release_supersedes_older_misnamed_asset() {
+        let mut malformed = release("v1.2.1", "1.2.1", false);
+        malformed.assets[0].name = "CypherSR-Desktop-GUI-v1.2.1-win-x6.exe".to_string();
+        let current = release("v1.3.0", "1.3.0", false);
+
+        let update = select_latest_desktop_release(&[malformed, current]).unwrap();
+
+        assert_eq!(update.version, "1.3.0");
+    }
 }

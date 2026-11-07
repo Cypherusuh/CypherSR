@@ -74,8 +74,9 @@ The local HTTP API reports Twitch authentication and connection status. By defau
 
 ## Building releases
 
-Set the release version in the repository-root `app-version.json`, then run
-these scripts from PowerShell:
+Set the release version in the repository-root `app-version.json` and
+`desktop\Cargo.toml` to the same value (for example, `1.3.0`), then run these
+scripts from PowerShell:
 
 ```powershell
 .\scripts\build-backend.ps1
@@ -94,9 +95,29 @@ and package-local `data\` are preserved, and data directories are excluded
 from release archives.
 
 For a combined Desktop release, upload the contents of `Publishing zip\` plus
-the versioned Desktop updater EXE from `Desktop Build\`. For a standalone
-backend release, upload the ZIPs from `Publishing zip\` and `latest.json` from
-`Backend Build\`. `Published App\` is the ready-to-run portable package.
+the versioned Desktop updater EXE from `Desktop Build\` to a GitHub release
+whose tag is exactly `v<version>` (for example, `v1.2.1`). The EXE is a
+separate required asset named exactly
+`CypherSR-Desktop-GUI-v<version>-win-x64.exe`; the similarly named Desktop GUI
+ZIP is only for manual installation. Include `latest.json` and all the ZIPs
+from `Publishing zip\`, then mark the combined release as the latest release
+so the backend updater can find its manifest.
+
+After uploading the release assets and marking the release as latest, run
+`.\scripts\verify-release.ps1`. It checks the public GitHub release, exact
+updater EXE filename, all required assets, manifest URLs, and SHA-256 digests.
+Do not announce the release unless this verification passes.
+
+To repair the existing 1.2.1 release for already-installed 1.2.0 updaters,
+rerun `.\scripts\publish-package.ps1` after generating the required build
+artifacts. Upload the regenerated `latest.json` and all package ZIPs, and upload
+`Desktop Build\CypherSR-Desktop-GUI-v1.2.1-win-x64.exe` with that exact name.
+Make the `v1.2.1` release the latest release. Remove or replace the mistyped
+`...win-x6.exe` release asset; the updater ignores it.
+
+For a standalone backend release, upload the ZIPs from `Publishing zip\` and
+`latest.json` from `Backend Build\`. `Published App\` is the ready-to-run
+portable package.
 
 ## Support
 

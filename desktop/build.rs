@@ -13,6 +13,12 @@ fn main() {
         .get("version")
         .and_then(serde_json::Value::as_str)
         .expect("app-version.json must contain a string version");
+    let cargo_version = env!("CARGO_PKG_VERSION");
+
+    assert_eq!(
+        app_version, cargo_version,
+        "desktop/Cargo.toml version must match app-version.json"
+    );
 
     assert!(
         app_version.split('.').count() == 3
