@@ -22,7 +22,7 @@ import {
 import { MediaHandler } from './media-handler.js';
 import { PageHandler } from './page-handler.js';
 import { PlayerState } from './player-state.js';
-import { runtimePath } from '../config/runtime-paths.js';
+import { dataPath, runtimePath } from '../config/runtime-paths.js';
 import type { DefaultSongManager } from '../playback/default-song-manager.js';
 import { resolve } from 'node:path';
 
@@ -67,7 +67,7 @@ export class MediaServer {
 
         this.mediaHandler = new MediaHandler(resolvedMediaDir);
         this.defaultMediaHandler = new MediaHandler(
-            resolve(runtimePath('data/default-song')),
+            dataPath('default-song'),
             '/api/default-media/',
         );
 

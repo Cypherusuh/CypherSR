@@ -5,6 +5,7 @@ use std::io;
 use std::mem::{size_of, zeroed};
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle, RawHandle};
 use std::os::windows::process::CommandExt;
+use std::path::Path;
 use std::process::{Child, Command};
 use std::rc::Rc;
 use std::sync::mpsc::{self, Sender};
@@ -219,7 +220,9 @@ fn register_bundled_mpv_if_needed() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    let data_dir = app_dir.join(DATA_DIRECTORY);
+    let data_dir = app_dir
+        .join(BACKEND_DIRECTORY)
+        .join(DATA_DIRECTORY);
     std::fs::create_dir_all(&data_dir)?;
 
     let registration_marker = data_dir.join("mpv-registration-path.txt");
@@ -328,7 +331,7 @@ fn launch_backend_patcher() -> Result<BackendPatcher, Box<dyn std::error::Error>
     let backend_dir = app_dir.join(BACKEND_DIRECTORY);
     let bundled_patcher = backend_dir.join(PATCHER_EXE);
     let (patcher_path, runtime_dir) = if bundled_patcher.is_file() {
-        (bundled_patcher, backend_dir)
+        (bundled_patcher, backend_dir.clone())
     } else {
         (
             app_dir.join("CypherSR-Updater.exe"),
@@ -347,8 +350,7 @@ fn launch_backend_patcher() -> Result<BackendPatcher, Box<dyn std::error::Error>
         .into());
     }
 
-    // Persistent portable data remains beside the Desktop executable.
-    let data_dir = app_dir.join(DATA_DIRECTORY);
+    let data_dir = backend_dir.join(DATA_DIRECTORY);
     std::fs::create_dir_all(&data_dir).map_err(|error| {
         io::Error::new(
             error.kind(),
@@ -358,6 +360,16 @@ fn launch_backend_patcher() -> Result<BackendPatcher, Box<dyn std::error::Error>
             ),
         )
     })?;
+
+    let legacy_data_dir = app_dir.join(DATA_DIRECTORY);
+    if legacy_data_dir != data_dir && legacy_data_dir.is_dir() {
+        println!(
+            "[Launcher] Merging legacy data from {} into {}",
+            legacy_data_dir.display(),
+            data_dir.display()
+        );
+        merge_legacy_data(&legacy_data_dir, &data_dir)?;
+    }
 
     println!("[Launcher] Updater: {}", patcher_path.display());
     println!("[Launcher] Data directory: {}", data_dir.display());
@@ -456,6 +468,52 @@ fn launch_backend_patcher() -> Result<BackendPatcher, Box<dyn std::error::Error>
         _child: child,
         _job: job,
     })
+}
+
+fn merge_legacy_data(source: &Path, destination: &Path) -> io::Result<()> {
+    std::fs::create_dir_all(destination)?;
+
+    for entry in std::fs::read_dir(source)? {
+        let entry = entry?;
+        let source_path = entry.path();
+        let destination_path = destination.join(entry.file_name());
+        let source_type = entry.file_type()?;
+        let destination_type = std::fs::symlink_metadata(&destination_path);
+
+        if source_type.is_dir() {
+            match destination_type {
+                Ok(metadata) if metadata.is_dir() => {
+                    merge_legacy_data(&source_path, &destination_path)?;
+                }
+                Ok(_) => continue,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                    std::fs::rename(&source_path, &destination_path)?;
+                }
+                Err(error) => return Err(error),
+            }
+        } else if source_type.is_file() {
+            match destination_type {
+                Ok(_) => continue,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                    std::fs::rename(&source_path, &destination_path)?;
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    }
+
+    match std::fs::remove_dir(source) {
+        Ok(()) => Ok(()),
+        Err(error)
+            if matches!(
+                error.kind(),
+                io::ErrorKind::DirectoryNotEmpty | io::ErrorKind::NotFound
+            ) =>
+        {
+            Ok(())
+        }
+        Err(error) => Err(error),
+    }
 }
 
 /// Finds and resumes the suspended updater's primary thread.
@@ -568,6 +626,52 @@ fn show_error_dialog(message: &str) {
             title.as_ptr(),
             MB_OK | MB_ICONERROR,
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::merge_legacy_data;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn legacy_data_is_merged_without_overwriting_existing_backend_data() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be after UNIX epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "cypersr-data-migration-{}-{unique}",
+            std::process::id()
+        ));
+        let source = root.join("data");
+        let destination = root.join("backend").join("data");
+
+        fs::create_dir_all(&source).expect("create legacy data directory");
+        fs::create_dir_all(&destination).expect("create backend data directory");
+        fs::write(source.join("config.json"), "legacy").expect("write legacy config");
+        fs::write(destination.join("config.json"), "backend").expect("write backend config");
+        fs::write(source.join("twitch-tokens.json"), "legacy token").expect("write legacy token");
+
+        merge_legacy_data(&source, &destination).expect("merge legacy data");
+
+        assert_eq!(
+            fs::read_to_string(destination.join("config.json")).expect("read backend config"),
+            "backend"
+        );
+        assert_eq!(
+            fs::read_to_string(destination.join("twitch-tokens.json"))
+                .expect("read migrated token"),
+            "legacy token"
+        );
+        assert_eq!(
+            fs::read_to_string(source.join("config.json"))
+                .expect("legacy conflict should be preserved"),
+            "legacy"
+        );
+
+        fs::remove_dir_all(root).expect("remove test directories");
     }
 }
 

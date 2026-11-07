@@ -36,9 +36,12 @@ reports the error and tries to start the installed version.
 The FULL desktop package keeps the updater, core, `public/`, and `vendor/`
 together inside `backend/`. Its launcher sets `SONG_REQUEST_RUNTIME_HOME` to
 that directory so the backend resolves assets and update files beside its
-binaries. Persistent `data/` remains beside the desktop executable and is
-passed through `SONG_REQUEST_HOME`. Do not delete `data/`; it stores backend
-configuration, authentication, and cached media.
+binaries. Persistent data is stored in `backend/data/`, shared with the
+standalone backend version through `SONG_REQUEST_HOME`. On first launch after
+upgrading, files from the legacy Desktop-level `data/` directory are merged
+into `backend/data/` without overwriting files already there. Do not delete
+`backend/data/`; it stores backend configuration, authentication, and cached
+media.
 
 ## Commands
 
