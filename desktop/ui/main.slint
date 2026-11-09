@@ -25,6 +25,8 @@ export component MainWindow inherits Window {
     // Twitch state reported by the backend API.
     in-out property <bool> twitch-connected: false;
     in-out property <bool> twitch-connecting: false;
+    in-out property <bool> twitch-reconnecting: false;
+    in-out property <bool> twitch-reconnect-failed: false;
     in-out property <string> twitch-status: "offline";
     in-out property <string> current-track: "Nothing playing";
     in-out property <string> current-artist: "Request a song to start playback";
@@ -77,6 +79,8 @@ export component MainWindow inherits Window {
             username: root.username;
             twitch-connected: root.twitch-connected;
             twitch-connecting: root.twitch-connecting;
+            twitch-reconnecting: root.twitch-reconnecting;
+            twitch-reconnect-failed: root.twitch-reconnect-failed;
             twitch-status: root.twitch-status;
 
             connection-toggle-requested => {

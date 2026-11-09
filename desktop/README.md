@@ -34,10 +34,11 @@ backend repository is not specified here.
 
 ## Title bar and Twitch connection
 
-- The left side shows Twitch as **Offline**, **Connecting...**, **Online**, or
-  **Connection error**. A status polling failure is displayed as a connection
-  error; polling continues so the UI can recover when the backend is available
-  again.
+- The left side shows Twitch as **Offline**, **Connecting...**, **Reconnecting...**,
+  **Online**, **Reconnect failed**, or **Connection error**. While reconnecting,
+  the button is disabled; after a failed attempt it offers **Retry**. A status
+  polling failure is displayed as a connection error; polling continues so the
+  UI can recover when the backend is available again.
 - **Connect** sends `POST /api/twitch/connect`; **Disconnect** sends
   `POST /api/twitch/disconnect`. The button is disabled while the backend
   reports that Twitch is connecting. The status poll, rather than the button

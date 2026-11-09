@@ -60,6 +60,8 @@ export interface TwitchApiStatus {
     authenticated: boolean;
     connecting: boolean;
     connected: boolean;
+    reconnecting: boolean;
+    reconnectFailed: boolean;
     username: string | null;
     error: string | null;
 }

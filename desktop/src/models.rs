@@ -71,11 +71,22 @@ impl Default for PlaybackState {
 
 #[cfg(test)]
 mod tests {
-    use super::PlaybackState;
+    use super::{PlaybackState, TwitchStatus};
 
     #[test]
     fn default_playback_volume_is_40_percent() {
         assert_eq!(PlaybackState::default().volume, 0.4);
+    }
+
+    #[test]
+    fn twitch_status_deserializes_reconnect_states() {
+        let status: TwitchStatus = serde_json::from_str(
+            r#"{"reconnecting":true,"reconnectFailed":true}"#,
+        )
+        .unwrap();
+
+        assert!(status.reconnecting);
+        assert!(status.reconnect_failed);
     }
 }
 
@@ -111,6 +122,9 @@ pub struct TwitchStatus {
     pub authenticated: bool,
     pub connecting: bool,
     pub connected: bool,
+    pub reconnecting: bool,
+    #[serde(rename = "reconnectFailed")]
+    pub reconnect_failed: bool,
     pub username: Option<String>,
     pub error: Option<String>,
 }

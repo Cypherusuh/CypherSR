@@ -172,9 +172,26 @@ async function main(): Promise<void> {
   };
 
   const isAuthenticationFailure = (error: unknown): boolean => {
+    if (
+      typeof error === 'object' &&
+      error !== null &&
+      'errorCode' in error
+    ) {
+      if (typeof error.errorCode === 'string') {
+        return error.errorCode === 'reauthentication_required';
+      }
+
+      if (
+        'statusCode' in error &&
+        typeof error.statusCode === 'number'
+      ) {
+        return error.statusCode === 401;
+      }
+    }
+
     const message = error instanceof Error ? error.message : String(error);
 
-    return /token refresh failed|token validation failed|invalid refresh token|refresh token.*invalid/i.test(
+    return /not authenticated with twitch|invalid refresh token|refresh token.*invalid/i.test(
       message,
     );
   };
@@ -189,6 +206,26 @@ async function main(): Promise<void> {
 
   let credentialsValidated = false;
   let twitchConnectionPromise: Promise<void> | null = null;
+
+  twitch.onConnectionStatus((connected, error) => {
+    twitchStatus.connected = connected;
+
+    if (connected) {
+      twitchStatus.error = null;
+      return;
+    }
+
+    if (error) {
+      twitchStatus.error = error.message;
+      console.error('[Twitch] Connection or chat subscription error:', error);
+
+      if (isAuthenticationFailure(error)) {
+        credentialsValidated = false;
+        twitchStatus.authenticated = false;
+        twitchStatus.username = null;
+      }
+    }
+  });
 
   const resolveAndSaveChannel = async (): Promise<void> => {
     const channel = await twitch.getAuthenticatedLogin();
@@ -255,11 +292,8 @@ async function main(): Promise<void> {
           await twitch.connect();
         }
 
-        twitchStatus.connected = true;
-        twitchStatus.error = null;
-
         console.log(
-          `[SongRequest] Connected to Twitch channel: ${config.twitch.channel}`,
+          `[Twitch] EventSub session established for channel: ${config.twitch.channel}`,
         );
       } catch (error) {
         twitchStatus.connected = false;
@@ -296,7 +330,15 @@ async function main(): Promise<void> {
   };
 
   mediaServer.setTwitchController({
-    getStatus: () => ({ ...twitchStatus }),
+    getStatus: () => {
+      const reconnecting = twitch.getConnectionState() === 'reconnecting';
+
+      return {
+        ...twitchStatus,
+        reconnecting,
+        reconnectFailed: reconnecting && twitchStatus.error !== null,
+      };
+    },
     connect: connectTwitch,
     disconnect: disconnectTwitch,
   });
@@ -329,7 +371,7 @@ async function main(): Promise<void> {
     );
   }
 
-  console.log('[SongRequest] Listening for chat messages.');
+  console.log('[SongRequest] Twitch chat message handler registered.');
   console.log('');
   console.log('=== Song Request Commands ===');
   console.log('  !sr <URL/title>  Request a song by URL or title.');

@@ -1,6 +1,7 @@
 import {
     TwitchClient as TwitchConnectorClient,
     type TwitchTokenStore,
+    type EventSubConnectionState,
 } from 'streamops-twitch-connector';
 import { exec, execFile } from 'node:child_process';
 
@@ -36,7 +37,13 @@ export class TwitchClient implements TwitchClientInterface {
     private broadcasterId: string | null = null;
     private authenticatedUserId: string | null = null;
     private removeMessageListener: (() => void) | null = null;
+    private removeSessionListener: (() => void) | null = null;
     private connecting: Promise<void> | null = null;
+    private eventSubRecovery: Promise<void> | null = null;
+    private chatSubscriptionActive = false;
+    private readonly connectionListeners = new Set<
+        (connected: boolean, error: Error | null) => void
+    >();
 
     constructor(options: TwitchAdapterOptions) {
         this.channel = options.channel.replace(/^@/, '').toLowerCase();
@@ -45,6 +52,28 @@ export class TwitchClient implements TwitchClientInterface {
             clientId: options.clientId,
             scopes: options.scopes,
             tokenStore: options.tokenStore,
+        });
+
+        this.client.tokens.onAuthError((error) => {
+            if (this.isAuthenticationFailure(error)) {
+                this.chatSubscriptionActive = false;
+                this.notifyConnectionStatus(false, error);
+            } else {
+                console.error('[Twitch] Background token validation failed:', error);
+            }
+        });
+        this.client.eventSub.onError((error) => {
+            this.chatSubscriptionActive = false;
+            this.notifyConnectionStatus(false, error);
+
+            if (error.message.includes('revoked the EventSub subscription')) {
+                void this.restartEventSub().catch((recoveryError: unknown) => {
+                    console.error(
+                        '[Twitch] Failed to restore the revoked chat subscription:',
+                        recoveryError,
+                    );
+                });
+            }
         });
     }
 
@@ -58,6 +87,10 @@ export class TwitchClient implements TwitchClientInterface {
         }
 
         return token.login.trim().replace(/^@/, '').toLowerCase();
+    }
+
+    getConnectionState(): EventSubConnectionState {
+        return this.client.eventSub.connectionState;
     }
 
     setChannel(channel: string): void {
@@ -110,6 +143,9 @@ export class TwitchClient implements TwitchClientInterface {
         } catch (error) {
             this.removeMessageListener?.();
             this.removeMessageListener = null;
+            this.removeSessionListener?.();
+            this.removeSessionListener = null;
+            this.chatSubscriptionActive = false;
 
             await this.client.disconnectEventSub().catch(() => undefined);
 
@@ -124,6 +160,17 @@ export class TwitchClient implements TwitchClientInterface {
 
 
     private async connectInternal(): Promise<void> {
+        if (this.eventSubRecovery) {
+            await this.eventSubRecovery;
+        }
+
+        if (
+            !this.chatSubscriptionActive &&
+            this.client.eventSub.connectionState !== 'disconnected'
+        ) {
+            await this.client.disconnectEventSub();
+        }
+
         const token = await this.client.tokens.getValidatedToken();
 
         this.authenticatedUserId = token.user_id;
@@ -164,12 +211,15 @@ export class TwitchClient implements TwitchClientInterface {
             },
         );
 
-        this.client.eventSub.onSession(
-            async (sessionId: string, isReconnectHandover: any) => {
+        this.removeSessionListener?.();
+        this.removeSessionListener = this.client.eventSub.onSession(
+            async (sessionId: string, isReconnectHandover: boolean) => {
                 if (isReconnectHandover) {
                     console.log(
                         '[Twitch] Session handover completed; retaining existing subscriptions.',
                     );
+                    this.chatSubscriptionActive = true;
+                    this.notifyConnectionStatus(true, null);
                     return;
                 }
 
@@ -194,6 +244,9 @@ export class TwitchClient implements TwitchClientInterface {
                         }).`,
                     );
                 }
+
+                this.chatSubscriptionActive = true;
+                this.notifyConnectionStatus(true, null);
             },
         );
 
@@ -204,13 +257,19 @@ export class TwitchClient implements TwitchClientInterface {
 
 
     async disconnect(): Promise<void> {
+        await this.eventSubRecovery?.catch(() => undefined);
+
         this.removeMessageListener?.();
         this.removeMessageListener = null;
+        this.removeSessionListener?.();
+        this.removeSessionListener = null;
 
         await this.client.disconnectEventSub();
 
         this.broadcasterId = null;
         this.authenticatedUserId = null;
+        this.chatSubscriptionActive = false;
+        this.notifyConnectionStatus(false, null);
     }
 
     async sendMessage(message: string): Promise<void> {
@@ -237,6 +296,48 @@ export class TwitchClient implements TwitchClientInterface {
         return () => {
             this.messageListeners.delete(listener);
         };
+    }
+
+    onConnectionStatus(
+        listener: (connected: boolean, error: Error | null) => void,
+    ): () => void {
+        this.connectionListeners.add(listener);
+
+        return () => {
+            this.connectionListeners.delete(listener);
+        };
+    }
+
+    private notifyConnectionStatus(
+        connected: boolean,
+        error: Error | null,
+    ): void {
+        for (const listener of this.connectionListeners) {
+            listener(connected, error);
+        }
+    }
+
+    private isAuthenticationFailure(error: Error): boolean {
+        return (
+            'errorCode' in error &&
+            error.errorCode === 'reauthentication_required'
+        );
+    }
+
+    private restartEventSub(): Promise<void> {
+        if (this.eventSubRecovery) {
+            return this.eventSubRecovery;
+        }
+
+        this.eventSubRecovery = (async () => {
+            await this.client.disconnectEventSub();
+            await this.client.connectEventSub();
+            await this.waitForSessionId();
+        })().finally(() => {
+            this.eventSubRecovery = null;
+        });
+
+        return this.eventSubRecovery;
     }
 
     private readonly messageListeners = new Set<

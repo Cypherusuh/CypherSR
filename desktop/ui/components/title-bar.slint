@@ -3,6 +3,8 @@ export component TitleBar inherits Rectangle {
     in property <string> username: "Username";
     in property <bool> twitch-connected: false;
     in property <bool> twitch-connecting: false;
+    in property <bool> twitch-reconnecting: false;
+    in property <bool> twitch-reconnect-failed: false;
     in property <string> twitch-status: "offline";
 
     callback connection-toggle-requested();
@@ -46,6 +48,8 @@ export component TitleBar inherits Rectangle {
 
                         background: root.twitch-status == "connected" ? #0077C2
                             : root.twitch-status == "connecting" ? #E5B94C
+                            : root.twitch-status == "reconnecting" ? #E5B94C
+                            : root.twitch-status == "reconnect-failed" ? #E05252
                             : root.twitch-status == "error" ? #E05252
                             : #777A83;
                     }
@@ -57,6 +61,8 @@ export component TitleBar inherits Rectangle {
                     Text {
                         text: root.twitch-status == "connected" ? "Online"
                             : root.twitch-status == "connecting" ? "Connecting..."
+                            : root.twitch-status == "reconnecting" ? "Reconnecting..."
+                            : root.twitch-status == "reconnect-failed" ? "Reconnect failed"
                             : root.twitch-status == "error" ? "Connection error"
                             : "Offline";
 
@@ -105,7 +111,8 @@ export component TitleBar inherits Rectangle {
             TouchArea {
                 width: 94px;
                 height: 27px;
-                enabled: !root.twitch-connecting;
+                enabled: !root.twitch-connecting
+                    && (!root.twitch-reconnecting || root.twitch-reconnect-failed);
 
                 Rectangle {
                     width: 100%;
@@ -119,6 +126,8 @@ export component TitleBar inherits Rectangle {
                     Text {
                         text: root.twitch-connecting ? "Connecting..."
                             : root.twitch-connected ? "Disconnect"
+                            : root.twitch-reconnect-failed ? "Retry"
+                            : root.twitch-reconnecting ? "Reconnecting..."
                             : "Connect";
 
                         color: #F0F0F2;

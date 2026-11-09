@@ -995,7 +995,11 @@ fn start_twitch_status_polling(
                     return;
                 };
 
-                let status_label = if status.error.is_some() {
+                let status_label = if status.reconnect_failed {
+                    "reconnect-failed"
+                } else if status.reconnecting {
+                    "reconnecting"
+                } else if status.error.is_some() {
                     "error"
                 } else if status.connecting {
                     "connecting"
@@ -1006,7 +1010,12 @@ fn start_twitch_status_polling(
                 };
 
                 ui.set_twitch_connected(status.connected);
-                ui.set_twitch_connecting(status.connecting);
+                ui.set_twitch_connecting(
+                    status.connecting
+                        || (status.reconnecting && !status.reconnect_failed),
+                );
+                ui.set_twitch_reconnecting(status.reconnecting);
+                ui.set_twitch_reconnect_failed(status.reconnect_failed);
                 ui.set_twitch_status(status_label.into());
 
                 if let Some(username) = status.username {
