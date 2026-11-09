@@ -10,9 +10,9 @@ depends=('nodejs>=22' 'yt-dlp' 'ffmpeg')
 makedepends=('npm')
 provides=('cyphersr-backend')
 
-# Pin the source to a released commit before publishing this recipe to the AUR.
+# Pin the package source to the Linux-support release revision.
 source=(
-  "CypherSR::git+https://github.com/Cypherusuh/CypherSR.git#commit=b0923446f966838840b601b66e7207e7e4b9ff77"
+  "CypherSR::git+https://github.com/Cypherusuh/CypherSR.git#commit=83bddfa76f08bafc0c9fe6284239691a267ee4f9"
   'cyphersr-backend'
 )
 sha256sums=(
@@ -37,7 +37,7 @@ package() {
   cp -a "${srcdir}/CypherSR/node_modules" "${appdir}/"
   cp -a "${srcdir}/CypherSR/public" "${appdir}/"
   install -Dm644 "${srcdir}/CypherSR/package.json" "${appdir}/package.json"
-  install -Dm755 "${srcdir}/packaging/arch/cyphersr-backend" \
+  install -Dm755 "${srcdir}/cyphersr-backend" \
     "${pkgdir}/usr/bin/cyphersr-backend"
 
   install -d "${licensedir}"
