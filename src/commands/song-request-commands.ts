@@ -59,7 +59,7 @@ export function createSongRequestCommands(
       name: 'sr',
       aliases: ['song'],
       description: 'Request a song by URL or search query.',
-      handler: async (message, args) => {
+      handler: async (message, args, sendStatus) => {
         if (!actions.isRequestModeEnabled()) {
           return reply('sr not enabled');
         }
@@ -70,6 +70,7 @@ export function createSongRequestCommands(
           return reply('Usage: !sr <URL or search query>');
         }
 
+        await sendStatus?.('Looking up...');
         return reply(await actions.requestSong(message, query));
       },
     },
