@@ -112,7 +112,7 @@ $dataDirectory = Join-Path $releaseRoot "data"
 New-Item -ItemType Directory -Force -Path $dataDirectory |
     Out-Null
 
-Write-Host "CypherSR backend version: $appVersion"
+Write-Host "CypherSR backend version:  $appVersion"
 Write-Host "Vendor version:            $vendorVersion"
 Write-Host "Standalone release tag:    $releaseTag"
 Write-Host "Backend update asset:      $updateAssetName"
@@ -154,12 +154,18 @@ function Build-SeaExecutable {
     Write-Host ""
     Write-Host "Bundling $EntryPoint -> $OutputName"
 
+    $esbuildExternalArgs = @(
+        '--external:@napi-rs/keyring',
+        '--external:@napi-rs/keyring-win32-x64-msvc'
+    )
+
     npx esbuild $entryPath `
         --bundle `
         --platform=node `
         --format=cjs `
         --target=node24 `
         --log-override:empty-import-meta=error `
+        @esbuildExternalArgs `
         "--outfile=$bundle"
 
     if ($LASTEXITCODE -ne 0 -or
@@ -261,13 +267,35 @@ Write-Host "Copying application assets..."
 
 $releasePublic = Join-Path $release "public"
 $releaseVendor = Join-Path $release "vendor"
+$releaseNodeModules = Join-Path $release "node_modules"
 Remove-Item -LiteralPath @(
     $releasePublic,
-    $releaseVendor
+    $releaseVendor,
+    $releaseNodeModules
 ) -Recurse -Force -ErrorAction SilentlyContinue
 
 Copy-Item -LiteralPath $publicSource `
     -Destination $releasePublic -Recurse -Force
+
+# Native addons required at runtime by the bundled SEA executable (e.g. @napi-rs/keyring).
+# These must exist on disk alongside the executable and remain external to the esbuild bundle.
+$nativeRuntimePackages = @(
+    "@napi-rs\keyring",
+    "@napi-rs\keyring-win32-x64-msvc"
+)
+
+foreach ($pkg in $nativeRuntimePackages) {
+    $sourcePkg = Join-Path $root "node_modules\$pkg"
+    $destPkg = Join-Path $release "node_modules\$pkg"
+
+    if (-not (Test-Path -LiteralPath $sourcePkg)) {
+        throw "Required native runtime package not found: $sourcePkg"
+    }
+
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $destPkg) | Out-Null
+    Copy-Item -LiteralPath $sourcePkg -Destination $destPkg -Recurse -Force
+    Write-Host "Copied native runtime package: $pkg"
+}
 
 $releaseYtDlp = Join-Path $releaseVendor "yt-dlp.exe"
 $releaseFfmpegDir = Join-Path $releaseVendor "ffmpeg\bin"
@@ -309,6 +337,24 @@ $backendVersionJson = @{
 [System.IO.File]::WriteAllText(
     (Join-Path $versioning "vendor.json"),
     $vendorVersionJson,
+    [System.Text.UTF8Encoding]::new($false)
+)
+# Unified versioning manifest for future consumers (kept alongside legacy folder).
+$versioningManifestPath = Join-Path $versionRoot "versioning.json"
+$vComponents = [ordered]@{}
+if (Test-Path -LiteralPath $versioningManifestPath) {
+    try {
+        $existing = Get-Content -LiteralPath $versioningManifestPath -Raw | ConvertFrom-Json
+        if ($existing.components) {
+            foreach ($p in $existing.components.PSObject.Properties) { $vComponents[$p.Name] = $p.Value }
+        }
+    } catch { }
+}
+$vComponents["backend"] = [ordered]@{ version = $appVersion }
+$vComponents["vendor"]  = [ordered]@{ version = $vendorVersion }
+[System.IO.File]::WriteAllText(
+    $versioningManifestPath,
+    ([ordered]@{ schemaVersion = 1; components = $vComponents } | ConvertTo-Json -Depth 20),
     [System.Text.UTF8Encoding]::new($false)
 )
 
@@ -369,6 +415,13 @@ function Copy-AppUpdatePayload {
 
     Copy-Item -LiteralPath (Join-Path $release "public") `
         -Destination $Destination -Recurse -Force
+
+    # Include native runtime packages required by the bundled core executable.
+    $releaseNodeModules = Join-Path $release "node_modules"
+    if (Test-Path -LiteralPath $releaseNodeModules) {
+        Copy-Item -LiteralPath $releaseNodeModules `
+            -Destination $Destination -Recurse -Force
+    }
 }
 
 function Compress-StageZip {
@@ -406,6 +459,8 @@ foreach ($stage in @($fullStage, $appUpdateStage, $vendorStage)) {
 }
 
 # Full portable package is wrapped in a CypherSR directory.
+# Vendor files are excluded to keep the backend package slimmer; the launcher
+# downloads them independently when missing or when the vendor version mismatches.
 $fullAppStage = Join-Path $fullStage "CypherSR"
 
 New-Item -ItemType Directory -Path $fullAppStage -Force |
@@ -415,9 +470,6 @@ Copy-AppUpdatePayload -Destination $fullAppStage
 
 Copy-Item -LiteralPath (Join-Path $release $launcherName) `
     -Destination $fullAppStage -Force
-
-Copy-Item -LiteralPath (Join-Path $release "vendor") `
-    -Destination $fullAppStage -Recurse -Force
 
 # Backend-only update: deliberately excludes vendor and launcher.
 Copy-AppUpdatePayload -Destination $appUpdateStage

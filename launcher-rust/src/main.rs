@@ -863,8 +863,20 @@ fn check_and_apply_updates(paths: &AppPaths) -> AppResult<()> {
     if let Some(spec) = make_vendor_spec(&manifest) {
         log(&format!("Latest vendor version: {}", spec.version));
 
-        if compare_versions(&spec.version, &installed_vendor)? > 0 {
-            log(&format!("Vendor update available: {}", spec.version));
+        let vendor_dir = paths.root.join(VENDOR_DIR);
+        let vendor_version_file = vendor_dir.join(VENDOR_VERSION_FILE);
+        let vendor_missing = !vendor_dir.is_dir() || !vendor_version_file.is_file();
+        let vendor_outdated = compare_versions(&spec.version, &installed_vendor)? > 0;
+
+        if vendor_missing || vendor_outdated {
+            if vendor_missing {
+                log(&format!(
+                    "Vendor files are missing; downloading vendor {}...",
+                    spec.version
+                ));
+            } else {
+                log(&format!("Vendor update available: {}", spec.version));
+            }
 
             let zip_path = download_update(paths, &spec)?;
             install_update(paths, &spec, &zip_path)?;

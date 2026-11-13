@@ -148,6 +148,7 @@ export class TwitchClient implements TwitchClientInterface {
             this.chatSubscriptionActive = false;
 
             await this.client.disconnectEventSub().catch(() => undefined);
+            this.client.tokens.dispose();
 
             this.broadcasterId = null;
             this.authenticatedUserId = null;
@@ -265,6 +266,8 @@ export class TwitchClient implements TwitchClientInterface {
         this.removeSessionListener = null;
 
         await this.client.disconnectEventSub();
+
+        this.client.tokens.dispose();
 
         this.broadcasterId = null;
         this.authenticatedUserId = null;

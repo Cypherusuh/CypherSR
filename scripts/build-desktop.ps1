@@ -3,13 +3,12 @@ $ErrorActionPreference = "Stop"
 
 # CypherSR Desktop frontend build.
 # Compiles the Rust/Slint GUI and creates a versioned ZIP release asset.
-# The version is read from the repository root app-version.json.
+# The desktop version is read from desktop/Cargo.toml (independent from backend).
 # The ZIP contains only CypherSR-Desktop.exe.
 # Project root is detected relative to this script.
 
 $FrontendRoot = Split-Path -Parent $PSScriptRoot
 $DesktopRoot = Join-Path $FrontendRoot "desktop"
-$VersionFile = Join-Path $FrontendRoot "app-version.json"
 $CargoManifest = Join-Path $DesktopRoot "Cargo.toml"
 $ReleaseDir = Join-Path $DesktopRoot "target\release"
 $ReleaseRoot = Join-Path $FrontendRoot "release"
@@ -27,33 +26,35 @@ function Require-Path {
     }
 }
 
-function Get-AppVersion {
+function Get-DesktopVersion {
     param(
         [Parameter(Mandatory = $true)]
-        [string]$VersionPath
+        [string]$ManifestPath
     )
 
-    try {
-        $versionConfig = Get-Content -LiteralPath $VersionPath -Raw |
-            ConvertFrom-Json
-    }
-    catch {
-        throw "Failed to parse app-version.json: $($_.Exception.Message)"
+    $manifest = Get-Content -LiteralPath $ManifestPath -Raw
+    $inPackage = $false
+    $version = $null
+
+    foreach ($line in ($manifest -split "`r?`n")) {
+        if ($line -match '^\s*\[(.+)\]\s*$') {
+            $inPackage = ($Matches[1] -eq 'package')
+            continue
+        }
+
+        if ($inPackage -and $line -match '^\s*version\s*=\s*"([^"]+)"\s*$') {
+            $version = $Matches[1]
+            break
+        }
     }
 
-    $version = [string]$versionConfig.version
-
-    if (
-        $version -notmatch
-        '^\d+\.\d+\.\d+$'
-    ) {
-        throw "app-version.json must contain version in the format 1.0.0"
+    if ($null -eq $version -or $version -notmatch '^\d+\.\d+\.\d+$') {
+        throw "desktop/Cargo.toml must contain a [package] version in the format 1.0.0"
     }
 
     return $version
 }
 
-Require-Path -Path $VersionFile -Description "Root app-version.json"
 Require-Path -Path $CargoManifest -Description "Desktop Cargo.toml"
 
 if (-not (Get-Command "cargo" -ErrorAction SilentlyContinue)) {
@@ -64,7 +65,7 @@ if (-not (Get-Command "Compress-Archive" -ErrorAction SilentlyContinue)) {
     throw "Compress-Archive is unavailable. Use a supported Windows PowerShell version."
 }
 
-$DesktopVersion = Get-AppVersion -VersionPath $VersionFile
+$DesktopVersion = Get-DesktopVersion -ManifestPath $CargoManifest
 
 $BuiltExePath = Join-Path $ReleaseDir "CypherSR-Desktop.exe"
 $VersionedReleaseDir = Join-Path $ReleaseRoot "v$DesktopVersion"
@@ -186,6 +187,23 @@ New-Item -ItemType Directory -Path $VersioningDir -Force | Out-Null
 [System.IO.File]::WriteAllText(
     (Join-Path $VersioningDir "desktop.json"),
     $desktopVersionJson,
+    [System.Text.UTF8Encoding]::new($false)
+)
+# Unified versioning manifest for future consumers (kept alongside legacy folder).
+$versioningManifestPath = Join-Path $VersionedReleaseDir "versioning.json"
+$vComponents = [ordered]@{}
+if (Test-Path -LiteralPath $versioningManifestPath) {
+    try {
+        $existing = Get-Content -LiteralPath $versioningManifestPath -Raw | ConvertFrom-Json
+        if ($existing.components) {
+            foreach ($p in $existing.components.PSObject.Properties) { $vComponents[$p.Name] = $p.Value }
+        }
+    } catch { }
+}
+$vComponents["desktop"] = [ordered]@{ version = $DesktopVersion }
+[System.IO.File]::WriteAllText(
+    $versioningManifestPath,
+    ([ordered]@{ schemaVersion = 1; components = $vComponents } | ConvertTo-Json -Depth 20),
     [System.Text.UTF8Encoding]::new($false)
 )
 

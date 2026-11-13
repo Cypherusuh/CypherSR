@@ -154,6 +154,8 @@ $desktopGuiZipName = "CypherSR-Desktop-GUI-v$desktopVersion-win-x64.zip"
 $desktopGuiZipSource = Join-Path $publishingZipDir $desktopGuiZipName
 $desktopUpdateAssetName = "CypherSR-Desktop-GUI-v$desktopVersion-win-x64.exe"
 
+$versioningJsonPath = Join-Path $versionPublishDir "versioning.json"
+
 $backendConfigPath = $versionFile
 $backendManifestPath = Join-Path $backendRelease "latest.json"
 
@@ -172,9 +174,6 @@ foreach ($item in @(
     @{ Path = $desktopGuiZipSource; Description = "Versioned Desktop GUI ZIP" },
     @{ Path = $backendConfigPath; Description = "Backend app-version.json" },
     @{ Path = $backendManifestPath; Description = "Backend latest.json" },
-    @{ Path = (Join-Path $versioningDir "desktop.json"); Description = "Desktop version metadata" },
-    @{ Path = (Join-Path $versioningDir "backend.json"); Description = "Backend version metadata" },
-    @{ Path = (Join-Path $versioningDir "vendor.json"); Description = "Vendor version metadata" },
     @{ Path = $backendPatcher; Description = "Built backend patcher" },
     @{ Path = $backendCore; Description = "Built backend core" },
     @{ Path = (Join-Path $backendPublic "player.html"); Description = "Backend public\player.html" },
@@ -203,15 +202,30 @@ if ($backendVersion -ne $desktopVersion) {
     throw "Desktop and backend versions must match the root app-version.json."
 }
 
-$desktopVersionMetadata = Get-Content -LiteralPath `
-    (Join-Path $versioningDir "desktop.json") -Raw | ConvertFrom-Json
-$backendVersionMetadata = Get-Content -LiteralPath `
-    (Join-Path $versioningDir "backend.json") -Raw | ConvertFrom-Json
-$vendorVersionMetadata = Get-Content -LiteralPath `
-    (Join-Path $versioningDir "vendor.json") -Raw | ConvertFrom-Json
 
+
+$unifiedVersioning = $null
+if (Test-Path -LiteralPath $versioningJsonPath) {
+    try { $unifiedVersioning = Get-Content -LiteralPath $versioningJsonPath -Raw | ConvertFrom-Json } catch { $unifiedVersioning = $null }
+}
+
+function Get-ComponentVersionMetadata {
+    param([string]$Name, [string]$LegacyFile)
+    if ($unifiedVersioning -and $unifiedVersioning.components -and ($unifiedVersioning.components.PSObject.Properties.Name -contains $Name)) {
+        return $unifiedVersioning.components.$Name
+    }
+    $legacyPath = Join-Path $versioningDir $LegacyFile
+    if (Test-Path -LiteralPath $legacyPath) {
+        return Get-Content -LiteralPath $legacyPath -Raw | ConvertFrom-Json
+    }
+    throw "Missing version metadata for '$Name'. Provide $legacyPath or $versioningJsonPath."
+}
+
+$desktopVersionMetadata = Get-ComponentVersionMetadata -Name "desktop" -LegacyFile "desktop.json"
+$backendVersionMetadata = Get-ComponentVersionMetadata -Name "backend" -LegacyFile "backend.json"
+$vendorVersionMetadata  = Get-ComponentVersionMetadata -Name "vendor"  -LegacyFile "vendor.json"
 if ([string]$desktopVersionMetadata.version -ne $desktopVersion) {
-    throw "Desktop version metadata does not match app-version.json."
+    throw "Desktop version metadata does not match expected desktop version."
 }
 
 if ([string]$backendVersionMetadata.version -ne $backendVersion) {
@@ -221,7 +235,6 @@ if ([string]$backendVersionMetadata.version -ne $backendVersion) {
 if ([string]$vendorVersionMetadata.version -ne $vendorVersion) {
     throw "Vendor version metadata does not match app-version.json."
 }
-
 # The Lite ZIP uses the backend version, so define it only after reading
 # and validating app-version.json.
 $liteZipName = "CypherSR-Lite-v$backendVersion-win-x64.zip"
@@ -631,6 +644,17 @@ $manifestOutput = Join-Path $publishDir "latest.json"
 $manifestJson = $backendManifest | ConvertTo-Json -Depth 20
 
 Write-Utf8NoBom -Path $manifestOutput -Content $manifestJson
+
+# Unified versioning.json (future format) alongside legacy versioning/ folder and latest.json.
+$unifiedOut = [ordered]@{
+    schemaVersion = 1
+    components = [ordered]@{
+        desktop = [ordered]@{ version = $desktopVersion; url = $desktopUpdateDownloadUrl; sha256 = $desktopUpdateHash }
+        backend = [ordered]@{ version = $backendVersion; url = $backendUpdateDownloadUrl; sha256 = $backendUpdateHash }
+        vendor  = [ordered]@{ version = $vendorVersion;  url = $vendorDownloadUrl;        sha256 = $vendorHash }
+    }
+} | ConvertTo-Json -Depth 20
+Write-Utf8NoBom -Path $versioningJsonPath -Content $unifiedOut
 
 # ---------------------------------------------------------------------------
 # 7. Validate generated files and archive contents.
