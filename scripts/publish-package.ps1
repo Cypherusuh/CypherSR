@@ -152,7 +152,11 @@ $desktopExe = Join-Path $desktopRelease $DesktopExeName
 $desktopConfig = Join-Path $DesktopRoot "config.toml"
 $desktopGuiZipName = "CypherSR-Desktop-GUI-v$desktopVersion-win-x64.zip"
 $desktopGuiZipSource = Join-Path $publishingZipDir $desktopGuiZipName
-$desktopUpdateAssetName = "CypherSR-Desktop-GUI-v$desktopVersion-win-x64.exe"
+$desktopGuiExeName = "CypherSR-Desktop-GUI-v$desktopVersion-win-x64.exe"
+# New updaters prefer the ZIP (extract + replace) to avoid exe download flags;
+# keep the EXE as a transition asset for already-installed updaters.
+$desktopUpdateAssetName = $desktopGuiZipName
+$desktopUpdateAssetSource = $desktopGuiZipSource
 
 $versioningJsonPath = Join-Path $versionPublishDir "versioning.json"
 
@@ -469,12 +473,15 @@ New-Item -ItemType Directory -Path @(
     $versioningDir
 ) -Force | Out-Null
 
-# Publish the executable separately for the in-app updater.
+# The desktop updater asset is the verified GUI ZIP (same as manual install).
+Require-Path -Path $desktopUpdateAssetSource -Description "Desktop updater ZIP asset"
+
+# Publish the raw executable as a transition updater asset for older clients.
 Copy-Item -LiteralPath $desktopExe `
-    -Destination (Join-Path $desktopRelease $desktopUpdateAssetName) -Force
+    -Destination (Join-Path $desktopRelease $desktopGuiExeName) -Force
 Require-Path `
-    -Path (Join-Path $desktopRelease $desktopUpdateAssetName) `
-    -Description "Desktop updater executable asset"
+    -Path (Join-Path $desktopRelease $desktopGuiExeName) `
+    -Description "Desktop updater EXE transition asset"
 
 # Rename the backend updater ZIP without changing its contents.
 if ([IO.Path]::GetFullPath($backendUpdateSource) -ne [IO.Path]::GetFullPath($backendUpdatePath)) {
@@ -570,8 +577,7 @@ Require-Path -Path (Join-Path $productMpv "mpv-register.bat") -Description "Pack
 # and vendor URLs to assets published under the Desktop release tag.
 # ---------------------------------------------------------------------------
 
-$desktopUpdateHash = Get-Sha256 `
-    -Path (Join-Path $desktopRelease $desktopUpdateAssetName)
+$desktopUpdateHash = Get-Sha256 -Path $desktopUpdateAssetSource
 $backendUpdateHash = Get-Sha256 -Path $backendUpdatePath
 $vendorHash = Get-Sha256 -Path $vendorZipPath
 $fullHash = Get-Sha256 -Path $fullZipPath
@@ -799,7 +805,8 @@ Write-Host "Backend updater:  $backendUpdateName"
 Write-Host "Vendor package:   $vendorZipName"
 Write-Host "Lite package:     $liteZipName"
 Write-Host ""
-Write-Host "Desktop update EXE: $desktopUpdateAssetName"
+Write-Host "Desktop GUI EXE:  $desktopGuiExeName (transition updater asset)"
+Write-Host "Desktop update ZIP: $desktopUpdateAssetName"
 Write-Host "Product data\ was preserved."
 Write-Host "Product backend\.tmp\ was removed."
 Write-Host "Full ZIP excludes data\ and .tmp\."
@@ -808,7 +815,7 @@ Write-Host "Lite ZIP was copied unchanged."
 Write-Host ""
 Write-Host "GitHub release tag: $releaseTag"
 Write-Host "Upload every file from $publishingZipDir and:"
-Write-Host "  $(Join-Path $desktopRelease $desktopUpdateAssetName)"
+Write-Host "  $(Join-Path $desktopRelease $desktopGuiExeName)"
 Write-Host "Mark the combined release as the latest release."
 Write-Host "Then run .\scripts\verify-release.ps1 before announcing it."
 Write-Host "============================================"

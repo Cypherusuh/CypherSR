@@ -20,14 +20,18 @@ const REPOSITORY: &str = "Cypherusuh/CypherSR";
 
 // Release asset naming convention.
 const DESKTOP_ASSET_PREFIX: &str = "CypherSR-Desktop-GUI-v";
-const DESKTOP_ASSET_SUFFIX: &str = "-win-x64.exe";
+const DESKTOP_ASSET_SUFFIX_ZIP: &str = "-win-x64.zip";
+const DESKTOP_ASSET_SUFFIX_EXE: &str = "-win-x64.exe";
 
 // Installed executable name.
 const DESKTOP_EXE_NAME: &str = "CypherSR-Desktop.exe";
 
 const DESKTOP_UPDATE_DIR: &str = ".tmp\\desktop-update";
 const STAGED_EXE_NAME: &str = "CypherSR-Desktop.exe";
+const DOWNLOADED_ZIP_NAME: &str = "CypherSR-Desktop-GUI.zip";
+const PARTIAL_ZIP_NAME: &str = "CypherSR-Desktop-GUI.zip.part";
 const PARTIAL_EXE_NAME: &str = "CypherSR-Desktop.exe.part";
+const EXTRACT_DIR_NAME: &str = "extracted";
 const UPDATE_SCRIPT_NAME: &str = "replace-desktop.ps1";
 
 const HTTP_TIMEOUT_SECS: u64 = 600;
@@ -65,6 +69,7 @@ struct DesktopUpdateManifest {
     url: String,
     sha256: String,
     size: u64,
+    is_zip: bool,
 }
 
 // ------------------------------------------------------------
@@ -200,36 +205,42 @@ fn select_latest_desktop_release(
     let mut malformed_assets = Vec::new();
 
     for release in releases.iter().filter(|release| !release.prerelease) {
-        let mut matching_assets = Vec::new();
+        let mut matching_assets: Vec<(&GitHubReleaseAsset, &str, bool)> = Vec::new();
 
         for asset in &release.assets {
             let Some(name) = asset.name.strip_prefix(DESKTOP_ASSET_PREFIX) else {
                 continue;
             };
 
-            if let Some(version) = name.strip_suffix(DESKTOP_ASSET_SUFFIX) {
-                matching_assets.push((asset, version));
-            } else if name.to_ascii_lowercase().ends_with(".exe") {
-                if let Some(version) = name
-                    .split_once("-win-")
-                    .and_then(|(version, _)| parse_version(version))
-                {
-                    malformed_assets.push((version, asset.name.as_str()));
+            if let Some(version) = name.strip_suffix(DESKTOP_ASSET_SUFFIX_ZIP) {
+                matching_assets.push((asset, version, true));
+            } else if let Some(version) = name.strip_suffix(DESKTOP_ASSET_SUFFIX_EXE) {
+                matching_assets.push((asset, version, false));
+            } else {
+                let lower = name.to_ascii_lowercase();
+                if lower.ends_with(".zip") || lower.ends_with(".exe") {
+                    if let Some(version) = name
+                        .split_once("-win-")
+                        .and_then(|(version, _)| parse_version(version))
+                    {
+                        malformed_assets.push((version, asset.name.as_str()));
+                    }
                 }
             }
         }
 
-        let Some((asset, version)) = matching_assets.first().copied() else {
+        if matching_assets.is_empty() {
             continue;
-        };
-
-        if matching_assets.len() > 1 {
-            return Err(io::Error::other(format!(
-                "Multiple desktop executable assets were found in release {}.",
-                release.tag_name
-            ))
-            .into());
         }
+
+        // Prefer ZIP for new/transition releases (extract + replace); keep EXE
+        // fallback so already-installed updaters can still update from releases
+        // that only provide the EXE asset.
+        let (asset, version, is_zip) = matching_assets
+            .iter()
+            .copied()
+            .find(|(_, _, zip)| *zip)
+            .unwrap_or(matching_assets[0]);
 
         let parsed_version = parse_version(version).ok_or_else(|| {
             io::Error::other(format!(
@@ -285,6 +296,7 @@ fn select_latest_desktop_release(
             url: asset.browser_download_url.clone(),
             sha256,
             size: asset.size,
+            is_zip,
         };
 
         match latest.as_ref() {
@@ -309,22 +321,25 @@ fn select_latest_desktop_release(
         {
             return Err(io::Error::other(format!(
                 "A newer Desktop release has a misnamed updater asset: {asset_name}. \
-                 Expected {DESKTOP_ASSET_PREFIX}<version>{DESKTOP_ASSET_SUFFIX}."
+                 Expected {DESKTOP_ASSET_PREFIX}<version>{DESKTOP_ASSET_SUFFIX_ZIP} or \
+                 {DESKTOP_ASSET_PREFIX}<version>{DESKTOP_ASSET_SUFFIX_EXE}."
             ))
             .into());
         }
     } else if let Some((_, asset_name)) = malformed_assets.first() {
         return Err(io::Error::other(format!(
             "Desktop updater asset is misnamed: {asset_name}. \
-             Expected {DESKTOP_ASSET_PREFIX}<version>{DESKTOP_ASSET_SUFFIX}."
+             Expected {DESKTOP_ASSET_PREFIX}<version>{DESKTOP_ASSET_SUFFIX_ZIP} or \
+             {DESKTOP_ASSET_PREFIX}<version>{DESKTOP_ASSET_SUFFIX_EXE}."
         ))
         .into());
     }
 
     latest.ok_or_else(|| {
         io::Error::other(format!(
-            "No stable release contains a desktop executable named \
-             {DESKTOP_ASSET_PREFIX}<version>{DESKTOP_ASSET_SUFFIX}."
+            "No stable release contains a desktop update asset named \
+             {DESKTOP_ASSET_PREFIX}<version>{DESKTOP_ASSET_SUFFIX_ZIP} or \
+             {DESKTOP_ASSET_PREFIX}<version>{DESKTOP_ASSET_SUFFIX_EXE}."
         ))
         .into()
     })
@@ -364,17 +379,30 @@ fn download_and_stage_update(
     fs::create_dir_all(&update_dir)?;
 
     let staged_executable = update_dir.join(STAGED_EXE_NAME);
-    let partial_executable = update_dir.join(PARTIAL_EXE_NAME);
+    let downloaded_zip = update_dir.join(DOWNLOADED_ZIP_NAME);
+    let partial_zip = update_dir.join(PARTIAL_ZIP_NAME);
+    let partial_exe = update_dir.join(PARTIAL_EXE_NAME);
+    let extract_dir = update_dir.join(EXTRACT_DIR_NAME);
     let script_path = update_dir.join(UPDATE_SCRIPT_NAME);
 
     // Remove stale files from previous update attempts.
     let _ = fs::remove_file(&staged_executable);
-    let _ = fs::remove_file(&partial_executable);
+    let _ = fs::remove_file(&downloaded_zip);
+    let _ = fs::remove_file(&partial_zip);
+    let _ = fs::remove_file(&partial_exe);
     let _ = fs::remove_file(&script_path);
+    let _ = fs::remove_dir_all(&extract_dir);
+
+    let partial_path = if manifest.is_zip {
+        &partial_zip
+    } else {
+        &partial_exe
+    };
 
     println!(
-        "[DesktopUpdate] Downloading version {} from {}",
+        "[DesktopUpdate] Downloading version {} ({}) from {}",
         manifest.version,
+        if manifest.is_zip { "zip" } else { "exe" },
         manifest.url
     );
 
@@ -397,7 +425,7 @@ fn download_and_stage_update(
         }
     }
 
-    let mut output = fs::File::create(&partial_executable)?;
+    let mut output = fs::File::create(partial_path)?;
     let mut hasher = Sha256::new();
 
     let mut buffer = [0_u8; 64 * 1024];
@@ -425,16 +453,16 @@ fn download_and_stage_update(
     drop(output);
 
     if total == 0 {
-        let _ = fs::remove_file(&partial_executable);
+        let _ = fs::remove_file(partial_path);
 
         return Err(
-            io::Error::other("The downloaded executable is empty").into()
+            io::Error::other("The downloaded update file is empty").into()
         );
     }
 
     // Verify downloaded size against GitHub metadata.
     if total != manifest.size {
-        let _ = fs::remove_file(&partial_executable);
+        let _ = fs::remove_file(partial_path);
 
         return Err(io::Error::other(format!(
             "Download size verification failed.\n\
@@ -450,7 +478,7 @@ fn download_and_stage_update(
     let actual_sha256 = format!("{:x}", hasher.finalize());
 
     if !actual_sha256.eq_ignore_ascii_case(&manifest.sha256) {
-        let _ = fs::remove_file(&partial_executable);
+        let _ = fs::remove_file(partial_path);
 
         return Err(io::Error::other(format!(
             "SHA-256 verification failed.\n\
@@ -462,14 +490,42 @@ fn download_and_stage_update(
         .into());
     }
 
-    // The download is now verified.
-    // Promote it from .part to the final staged executable.
-    fs::rename(&partial_executable, &staged_executable)?;
+    if manifest.is_zip {
+        // The download is now verified.
+        fs::rename(&partial_zip, &downloaded_zip)?;
 
-    println!(
-        "[DesktopUpdate] Verified update and staged {}",
-        staged_executable.display()
-    );
+        println!(
+            "[DesktopUpdate] Verified update archive {}",
+            downloaded_zip.display()
+        );
+
+        if let Err(error) =
+            extract_update_executable(&downloaded_zip, &extract_dir, &staged_executable)
+        {
+            let _ = fs::remove_file(&downloaded_zip);
+            let _ = fs::remove_dir_all(&extract_dir);
+            let _ = fs::remove_file(&staged_executable);
+            return Err(error.into());
+        }
+
+        // Remove the downloaded ZIP after extraction; the replacement script
+        // removes the entire update directory (.tmp/desktop-update) on completion.
+        let _ = fs::remove_file(&downloaded_zip);
+        let _ = fs::remove_dir_all(&extract_dir);
+
+        println!(
+            "[DesktopUpdate] Extracted update and staged {}",
+            staged_executable.display()
+        );
+    } else {
+        // EXE asset (transition compatibility for already-installed updaters).
+        fs::rename(&partial_exe, &staged_executable)?;
+
+        println!(
+            "[DesktopUpdate] Verified update and staged {}",
+            staged_executable.display()
+        );
+    }
 
     if let Err(error) = start_replacement_script(
         &executable,
@@ -479,6 +535,7 @@ fn download_and_stage_update(
     ) {
         let _ = fs::remove_file(&staged_executable);
         let _ = fs::remove_file(&script_path);
+        let _ = fs::remove_dir_all(&update_dir);
 
         return Err(error.into());
     }
@@ -487,6 +544,53 @@ fn download_and_stage_update(
         "[DesktopUpdate] Handing off replacement to PowerShell."
     );
 
+    Ok(())
+}
+
+// ------------------------------------------------------------
+// Archive extraction
+// ------------------------------------------------------------
+
+fn extract_update_executable(
+    zip_path: &Path,
+    extract_dir: &Path,
+    staged_executable: &Path,
+) -> io::Result<()> {
+    if extract_dir.exists() {
+        fs::remove_dir_all(extract_dir)?;
+    }
+    fs::create_dir_all(extract_dir)?;
+
+    let status = Command::new("powershell.exe")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            "Expand-Archive -LiteralPath $args[0] -DestinationPath $args[1] -Force",
+        ])
+        .arg(zip_path)
+        .arg(extract_dir)
+        .status()?;
+
+    if !status.success() {
+        return Err(io::Error::other(format!(
+            "Failed to extract the desktop update archive (exit status: {status})"
+        )));
+    }
+
+    let extracted = extract_dir.join(DESKTOP_EXE_NAME);
+    if !extracted.is_file() {
+        return Err(io::Error::other(format!(
+            "Desktop update archive did not contain {DESKTOP_EXE_NAME}"
+        )));
+    }
+
+    if staged_executable.exists() {
+        fs::remove_file(staged_executable)?;
+    }
+    fs::rename(&extracted, staged_executable)?;
     Ok(())
 }
 
@@ -667,7 +771,11 @@ mod tests {
     use super::*;
 
     fn release(tag: &str, version: &str, prerelease: bool) -> GitHubRelease {
-        let asset_name = format!("{DESKTOP_ASSET_PREFIX}{version}{DESKTOP_ASSET_SUFFIX}");
+        release_zip(tag, version, prerelease)
+    }
+
+    fn release_zip(tag: &str, version: &str, prerelease: bool) -> GitHubRelease {
+        let asset_name = format!("{DESKTOP_ASSET_PREFIX}{version}{DESKTOP_ASSET_SUFFIX_ZIP}");
 
         GitHubRelease {
             tag_name: tag.to_string(),
@@ -679,6 +787,23 @@ mod tests {
                 name: asset_name,
                 digest: Some(format!("sha256:{}", "a".repeat(64))),
                 size: 1024,
+            }],
+        }
+    }
+
+    fn release_exe(tag: &str, version: &str, prerelease: bool) -> GitHubRelease {
+        let asset_name = format!("{DESKTOP_ASSET_PREFIX}{version}{DESKTOP_ASSET_SUFFIX_EXE}");
+
+        GitHubRelease {
+            tag_name: tag.to_string(),
+            prerelease,
+            assets: vec![GitHubReleaseAsset {
+                browser_download_url: format!(
+                    "https://github.com/{REPOSITORY}/releases/download/{tag}/{asset_name}"
+                ),
+                name: asset_name,
+                digest: Some(format!("sha256:{}", "b".repeat(64))),
+                size: 2048,
             }],
         }
     }
@@ -695,12 +820,35 @@ mod tests {
 
         assert_eq!(update.version, "1.2.1");
         assert_eq!(update.release_tag, "v1.2.1");
+        assert!(update.is_zip);
     }
 
     #[test]
-    fn rejects_release_without_exact_updater_exe_asset_name() {
+    fn accepts_exe_asset_for_transition_compatibility() {
+        let releases = [release_exe("v1.2.1", "1.2.1", false)];
+
+        let update = select_latest_desktop_release(&releases).unwrap();
+
+        assert_eq!(update.version, "1.2.1");
+        assert!(!update.is_zip);
+        assert!(update.url.ends_with(".exe"));
+    }
+
+    #[test]
+    fn prefers_zip_when_both_assets_are_present() {
+        let mut release = release_zip("v1.2.1", "1.2.1", false);
+        release.assets.push(release_exe("v1.2.1", "1.2.1", false).assets.remove(0));
+
+        let update = select_latest_desktop_release(&[release]).unwrap();
+
+        assert!(update.is_zip);
+        assert!(update.url.ends_with(".zip"));
+    }
+
+    #[test]
+    fn rejects_release_without_exact_updater_asset_name() {
         let mut release = release("v1.2.1", "1.2.1", false);
-        release.assets[0].name = "CypherSR-Desktop-GUI-v1.2.1-win-x6.exe".to_string();
+        release.assets[0].name = "CypherSR-Desktop-GUI-v1.2.1-win-x6.zip".to_string();
 
         assert!(select_latest_desktop_release(&[release]).is_err());
     }
@@ -709,7 +857,7 @@ mod tests {
     fn reports_newer_misnamed_asset_instead_of_silently_using_old_release() {
         let valid = release("v1.0.2", "1.0.2", false);
         let mut malformed = release("v1.2.1", "1.2.1", false);
-        malformed.assets[0].name = "CypherSR-Desktop-GUI-v1.2.1-win-x6.exe".to_string();
+        malformed.assets[0].name = "CypherSR-Desktop-GUI-v1.2.1-win-x6.zip".to_string();
 
         let error = select_latest_desktop_release(&[valid, malformed]).unwrap_err();
 
@@ -719,11 +867,12 @@ mod tests {
     #[test]
     fn valid_new_release_supersedes_older_misnamed_asset() {
         let mut malformed = release("v1.2.1", "1.2.1", false);
-        malformed.assets[0].name = "CypherSR-Desktop-GUI-v1.2.1-win-x6.exe".to_string();
+        malformed.assets[0].name = "CypherSR-Desktop-GUI-v1.2.1-win-x6.zip".to_string();
         let current = release("v1.3.0", "1.3.0", false);
 
         let update = select_latest_desktop_release(&[malformed, current]).unwrap();
 
         assert_eq!(update.version, "1.3.0");
+        assert!(update.is_zip);
     }
 }

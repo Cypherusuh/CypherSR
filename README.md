@@ -94,26 +94,48 @@ contains the desktop executable. The `versioning\` folder contains
 and package-local `data\` are preserved, and data directories are excluded
 from release archives.
 
-For a combined Desktop release, upload the contents of `Publishing zip\` plus
-the versioned Desktop updater EXE from `Desktop Build\` to a GitHub release
-whose tag is exactly `v<version>` (for example, `v1.2.1`). The EXE is a
-separate required asset named exactly
-`CypherSR-Desktop-GUI-v<version>-win-x64.exe`; the similarly named Desktop GUI
-ZIP is only for manual installation. Include `latest.json` and all the ZIPs
-from `Publishing zip\`, then mark the combined release as the latest release
-so the backend updater can find its manifest.
+For a combined Desktop release, upload the contents of `Publishing zip\` and
+`Desktop Build\CypherSR-Desktop-GUI-v<version>-win-x64.exe` to a GitHub release
+whose tag is exactly `v<version>` (for example, `v1.2.1`). This is a transition
+release: the new updater downloads and verifies
+`CypherSR-Desktop-GUI-v<version>-win-x64.zip` (ZIP containing
+`CypherSR-Desktop.exe`), extracts it in `.tmp\desktop-update\`, stages the
+executable, replaces the running executable on exit, and removes
+`.tmp\desktop-update\` afterward. The same ZIP is used for manual installation.
+The separate `...-win-x64.exe` asset is kept so already-installed (old)
+updaters can still update; include it with the exact name. Include
+`latest.json` and all the ZIPs from `Publishing zip\`, then mark the combined
+release as the latest release so the backend updater can find its manifest.
 
 After uploading the release assets and marking the release as latest, run
-`.\scripts\verify-release.ps1`. It checks the public GitHub release, exact
-updater EXE filename, all required assets, manifest URLs, and SHA-256 digests.
-Do not announce the release unless this verification passes.
+`.\scripts\verify-release.ps1`. It checks the public GitHub release, required
+assets (including the transition EXE), manifest URLs, and SHA-256 digests. Do
+not announce the release unless this verification passes.
 
-To repair the existing 1.2.1 release for already-installed 1.2.0 updaters,
-rerun `.\scripts\publish-package.ps1` after generating the required build
-artifacts. Upload the regenerated `latest.json` and all package ZIPs, and upload
-`Desktop Build\CypherSR-Desktop-GUI-v1.2.1-win-x64.exe` with that exact name.
-Make the `v1.2.1` release the latest release. Remove or replace the mistyped
-`...win-x6.exe` release asset; the updater ignores it.
+To repair an existing release for installed updaters, rerun
+`.\scripts\publish-package.ps1` after generating the required build artifacts.
+Upload the regenerated `latest.json`, all package ZIPs from `Publishing zip\`,
+and `Desktop Build\CypherSR-Desktop-GUI-v<version>-win-x64.exe` with their
+exact names. Make the release the latest release and remove or replace
+stale/mistyped Desktop GUI updater assets if necessary. `Desktop Build\`
+contains `CypherSR-Desktop.exe` and the transition updater EXE, and
+`Backend Build\` contains backend executables, `version.json`, and
+`latest.json`. `Published App\` is the ready-to-run portable package.
+`versioning\` and `versioning.json` are per-component version sources used by
+the build scripts and future manifest updates. If `Backend Build\` or
+`Desktop Build\` is missing, run `build-backend.ps1` and/or `build-desktop.ps1`
+first. If `versioning\` files or `versioning.json` are missing, use
+`app-version.json` and rebuild the missing release component. If the packaging
+scripts cannot find `latest.json`, place the backend manifest in
+`Backend Build\`, regenerate it with `build-backend.ps1`, or restore it from the
+release assets. `version.json` and `latest.json` remain in use for the current
+updater path. `versioning.json` is the future unified manifest format kept in
+sync for upcoming updater and packaging changes. Existing runtime data, saved
+vendor runtime files, and user-provided FFmpeg or MPV files are preserved by
+the launcher and updater when possible. Sensitive runtime data can be stored in
+the OS credential store; files under `data/` remain on disk. `data/` must
+never be included in a build, package, ZIP, or release upload. If the Desktop
+GUI fails to open, the launcher continues running headlessly.
 
 For a standalone backend release, upload the ZIPs from `Publishing zip\` and
 `latest.json` from `Backend Build\`. `Published App\` is the ready-to-run

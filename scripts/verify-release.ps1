@@ -35,10 +35,11 @@ if ($latest.tag_name -ne $tag) {
     throw "Release $tag is not GitHub's latest release; latest is $($latest.tag_name). The backend updater uses latest.json."
 }
 
-$desktopExeName = "CypherSR-Desktop-GUI-v$version-win-x64.exe"
+$desktopUpdateName = "CypherSR-Desktop-GUI-v$version-win-x64.zip"
+$desktopTransitionExeName = "CypherSR-Desktop-GUI-v$version-win-x64.exe"
 $requiredAssets = @(
-    $desktopExeName,
-    "CypherSR-Desktop-GUI-v$version-win-x64.zip",
+    $desktopUpdateName,
+    $desktopTransitionExeName,
     "CypherSR-Backend-Update-v$version-win-x64.zip",
     "CypherSR-Full-v$version-win-x64.zip",
     "CypherSR-Lite-v$version-win-x64.zip",
@@ -71,7 +72,7 @@ $releaseBaseUrl = "https://github.com/$Repository/releases/download/$tag"
 
 $expectedManifestAssets = @(
     @{
-        Name = $desktopExeName
+        Name = $desktopUpdateName
         Url = [string]$manifest.desktop.url
         Hash = [string]$manifest.desktop.sha256
     },
