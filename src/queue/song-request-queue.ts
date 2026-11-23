@@ -137,6 +137,23 @@ export class SongRequestQueue {
     return true;
   }
 
+  removeById(id: string, requesterId?: string): boolean {
+    const index = this.pending.findIndex(
+      (request) => request.id === id,
+    );
+
+    if (index === -1) {
+      return false;
+    }
+
+    if (requesterId && this.pending[index].requester.id !== requesterId) {
+      return false;
+    }
+
+    this.pending.splice(index, 1);
+    return true;
+  }
+
   removeLatestPendingByUser(userId: string): SongRequest | null {
     for (let index = this.pending.length - 1; index >= 0; index--) {
       const request = this.pending[index];
@@ -148,6 +165,34 @@ export class SongRequestQueue {
     }
 
     return null;
+  }
+
+  moveUp(id: string): boolean {
+    const index = this.pending.findIndex(
+      (request) => request.id === id,
+    );
+
+    if (index <= 0) {
+      return false;
+    }
+
+    const [moved] = this.pending.splice(index, 1);
+    this.pending.splice(index - 1, 0, moved);
+    return true;
+  }
+
+  moveDown(id: string): boolean {
+    const index = this.pending.findIndex(
+      (request) => request.id === id,
+    );
+
+    if (index === -1 || index >= this.pending.length - 1) {
+      return false;
+    }
+
+    const [moved] = this.pending.splice(index, 1);
+    this.pending.splice(index + 1, 0, moved);
+    return true;
   }
 
   getSnapshot(): QueueSnapshot {

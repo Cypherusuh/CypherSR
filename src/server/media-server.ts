@@ -11,6 +11,7 @@ import type {
     PreparedMedia,
 } from '../playback/media-transcoder.js';
 import type { PlaybackCoordinator } from '../playback/playback-coordinator.js';
+import type { SongRequestQueue } from '../queue/song-request-queue.js';
 
 import {
     isObject,
@@ -62,6 +63,7 @@ export class MediaServer {
         private readonly trackResolver: TrackResolver,
         private readonly transcoder: MediaTranscoder,
         private readonly defaultSongManager: DefaultSongManager,
+        private readonly songRequestQueue: SongRequestQueue,
     ) {
         const resolvedMediaDir = runtimePath(mediaDir);
 
@@ -207,6 +209,74 @@ export class MediaServer {
             }
 
             this.sendJson(response, 200, coordinator.getQueue());
+            return;
+        }
+
+        if (pathname === '/api/queue/remove') {
+            if (!this.requireMethod(request, response, 'POST')) {
+                return;
+            }
+
+            const coordinator = this.getCoordinator(response);
+
+            if (!coordinator) {
+                return;
+            }
+
+            const payload = await this.readJsonBody(request, response);
+
+            if (!payload) {
+                return;
+            }
+
+            if (typeof payload.requestId !== 'string') {
+                this.sendError(response, 400, 'requestId is required');
+                return;
+            }
+
+            const requesterId = typeof payload.requesterId === 'string' ? payload.requesterId : undefined;
+            const removed = this.songRequestQueue.removeById(payload.requestId, requesterId);
+
+            this.sendJson(response, 200, { removed });
+            return;
+        }
+
+        if (pathname === '/api/queue/move') {
+            if (!this.requireMethod(request, response, 'POST')) {
+                return;
+            }
+
+            const coordinator = this.getCoordinator(response);
+
+            if (!coordinator) {
+                return;
+            }
+
+            const payload = await this.readJsonBody(request, response);
+
+            if (!payload) {
+                return;
+            }
+
+            if (typeof payload.requestId !== 'string') {
+                this.sendError(response, 400, 'requestId is required');
+                return;
+            }
+
+            if (typeof payload.direction !== 'string' || !['up', 'down'].includes(payload.direction)) {
+                this.sendError(response, 400, 'direction must be "up" or "down"');
+                return;
+            }
+
+            let moved = false;
+
+            if (payload.direction === 'up') {
+                moved = this.songRequestQueue.moveUp(payload.requestId);
+            } else {
+                moved = this.songRequestQueue.moveDown(payload.requestId);
+            }
+
+            this.sendJson(response, 200, { moved });
             return;
         }
 

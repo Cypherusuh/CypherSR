@@ -93,6 +93,7 @@ async function main(): Promise<void> {
     trackResolver,
     transcoder,
     defaultSongManager,
+    queue,
   );
 
   const playback = new PlaybackCoordinator(
