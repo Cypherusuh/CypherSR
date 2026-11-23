@@ -185,6 +185,22 @@ pub fn fetch_snapshot(
         .map(|entry| entry.id.clone())
         .collect();
 
+    let mut default_song_title = "No default song".to_string();
+    let mut default_song_duration = String::new();
+
+    if let Ok(resp) = client.get(format!("{base_url}/api/default-song")).send() {
+        if let Ok(json) = resp.json::<serde_json::Value>() {
+            if let Some(title) = json.get("title").and_then(|v| v.as_str()) {
+                default_song_title = title.to_string();
+            }
+            if let Some(duration) = json.get("duration").and_then(|v| v.as_f64()) {
+                let mins = (duration / 60.0).floor() as u64;
+                let secs = (duration % 60.0).round() as u64;
+                default_song_duration = format!("{mins}:{secs:02}");
+            }
+        }
+    }
+
     Ok(UiSnapshot {
         // This is backend/player API connectivity, not Twitch connectivity.
         connected: true,
@@ -196,6 +212,8 @@ pub fn fetch_snapshot(
         control: player.control,
         queue_items,
         queue_item_ids,
+        default_song_title,
+        default_song_duration,
     })
 }
 

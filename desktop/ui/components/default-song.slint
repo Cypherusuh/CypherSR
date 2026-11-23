@@ -1,0 +1,41 @@
+export component DefaultSong inherits Rectangle {
+    in property <string> title: "No default song";
+    in property <string> duration: "";
+
+    background: #151619;
+    border-width: 1px;
+    border-color: #292B30;
+    border-radius: 3px;
+
+    VerticalLayout {
+        padding: 8px;
+        spacing: 2px;
+
+        Text {
+            text: "Default Song";
+            color: #858891;
+            font-size: 10px;
+            font-weight: 700;
+        }
+
+        HorizontalLayout {
+            spacing: 8px;
+
+            Text {
+                text: root.title;
+                color: #F0F0F2;
+                font-size: 12px;
+                overflow: elide;
+                horizontal-stretch: 1;
+                vertical-alignment: center;
+            }
+
+            Text {
+                text: root.duration;
+                color: #858891;
+                font-size: 11px;
+                vertical-alignment: center;
+            }
+        }
+    }
+}

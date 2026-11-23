@@ -3,6 +3,7 @@ import { ScrollView } from "std-widgets.slint";
 import { TitleBar } from "components/title-bar.slint";
 import { NowPlaying } from "components/now-playing.slint";
 import { Playlist } from "components/playlist.slint";
+import { DefaultSong } from "components/default-song.slint";
 import { OverlaySection } from "components/overlay-section.slint";
 import { Footer } from "components/footer.slint";
 import { VideoPreview } from "components/video-preview.slint";
@@ -32,6 +33,8 @@ export component MainWindow inherits Window {
     in-out property <string> current-artist: "Request a song to start playback";
     in-out property <[string]> queue-items: [];
     in-out property <[string]> queue-item-ids: [];
+    in-out property <string> default-song-title: "No default song";
+    in-out property <string> default-song-duration: "";
     in-out property <int> selected-queue-index: -1;
     in-out property <string> delete-confirm-id: "";
     in-out property <bool> overlays-expanded: false;
@@ -221,6 +224,15 @@ export component MainWindow inherits Window {
                     queue-item-moved-down(id) => {
                         root.queue-item-moved-down(id);
                     }
+                }
+
+                DefaultSong {
+                    width: 100%;
+                    height: 52px;
+                    vertical-stretch: 0;
+
+                    title: root.default-song-title;
+                    duration: root.default-song-duration;
                 }
 
                 OverlaySection {

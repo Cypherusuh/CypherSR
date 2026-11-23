@@ -172,6 +172,9 @@ pub(crate) fn start_backend_polling(
             let id_model = Rc::new(VecModel::from(ids));
             ui.set_queue_item_ids(ModelRc::from(id_model));
 
+            ui.set_default_song_title(snapshot.default_song_title.into());
+            ui.set_default_song_duration(snapshot.default_song_duration.into());
+
             ui.set_playback_position(snapshot.playback.position as f32);
             ui.set_playback_duration(snapshot.playback.duration as f32);
             ui.set_playback_volume(snapshot.playback.volume as f32);

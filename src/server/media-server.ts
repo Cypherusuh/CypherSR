@@ -280,6 +280,15 @@ export class MediaServer {
             return;
         }
 
+        if (pathname === '/api/default-song') {
+            if (!this.requireMethod(request, response, 'GET')) {
+                return;
+            }
+
+            this.handleDefaultSong(response);
+            return;
+        }
+
         if (pathname === '/api/player/state') {
             if (!this.requireMethod(request, response, 'GET')) {
                 return;
@@ -500,6 +509,14 @@ export class MediaServer {
 
         this.sendError(response, 503, 'Playback is not initialized');
         return null;
+    }
+
+    private handleDefaultSong(response: ServerResponse): void {
+        const song = this.defaultSongManager.getDefault();
+        this.sendJson(response, 200, {
+            title: song?.track.title ?? null,
+            duration: song?.track.duration ?? null,
+        });
     }
 
     private handlePlayerState(response: ServerResponse): void {

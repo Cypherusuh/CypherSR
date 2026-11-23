@@ -109,6 +109,8 @@ pub struct UiSnapshot {
     pub control: Option<PlayerControl>,
     pub queue_items: Vec<String>,
     pub queue_item_ids: Vec<String>,
+    pub default_song_title: String,
+    pub default_song_duration: String,
 }
 
 #[derive(Debug, Clone, Default)]
