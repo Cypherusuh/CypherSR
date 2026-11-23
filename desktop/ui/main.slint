@@ -33,6 +33,7 @@ export component MainWindow inherits Window {
     in-out property <[string]> queue-items: [];
     in-out property <[string]> queue-item-ids: [];
     in-out property <int> selected-queue-index: -1;
+    in-out property <string> delete-confirm-id: "";
     in-out property <bool> overlays-expanded: false;
     in-out property <bool> video-visible: false;
     in-out property <string> current-media-url: "";
@@ -203,6 +204,7 @@ export component MainWindow inherits Window {
                     queue-items: root.queue-items;
                     queue-item-ids: root.queue-item-ids;
                     selected-queue-index <=> root.selected-queue-index;
+                    delete-confirm-id <=> root.delete-confirm-id;
 
                     queue-item-selected(index) => {
                         root.queue-item-selected(index);

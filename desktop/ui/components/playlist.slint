@@ -5,6 +5,7 @@ export component Playlist inherits Rectangle {
     in property <[string]> queue-items: [];
     in property <[string]> queue-item-ids: [];
     in-out property <int> selected-queue-index: -1;
+    in-out property <string> delete-confirm-id: "";
 
     callback queue-item-selected(int);
     callback queue-item-removed(string);
@@ -57,7 +58,6 @@ export component Playlist inherits Rectangle {
                     HorizontalLayout {
                         padding: 8px;
                         spacing: 9px;
-                        alignment: center;
 
                         Text {
                             text: (index + 1) < 10
@@ -91,16 +91,18 @@ export component Playlist inherits Rectangle {
                                 height: parent.height;
 
                                 Text {
-                                    text: "✕";
-                                    color: #F0F0F2;
-                                    font-size: 11px;
+                                    text: "X";
+                                    color: root.selected-queue-index == index
+                                        ? #000000
+                                        : #ff8299;
+                                    font-size: 12px;
                                     horizontal-alignment: center;
                                     vertical-alignment: center;
                                 }
                             }
 
                             clicked => {
-                                root.queue-item-removed(root.queue-item-ids[index]);
+                                root.delete-confirm-id = root.queue-item-ids[index];
                             }
                         }
 
@@ -165,6 +167,80 @@ export component Playlist inherits Rectangle {
                 clicked => {
                     root.selected-queue-index = index;
                     root.queue-item-selected(index);
+                }
+            }
+        }
+    }
+
+    if root.delete-confirm-id != "" : Rectangle {
+        background: #000000cc;
+        width: parent.width;
+        height: parent.height;
+
+        VerticalLayout {
+            width: parent.width;
+            alignment: center;
+            spacing: 12px;
+
+            Text {
+                text: "Remove this song from the playlist?";
+                color: #F0F0F2;
+                font-size: 13px;
+                horizontal-alignment: center;
+            }
+
+            HorizontalLayout {
+                width: parent.width;
+                alignment: center;
+                spacing: 12px;
+
+                TouchArea {
+                    width: 70px;
+                    height: 32px;
+
+                    Rectangle {
+                        background: #ff8299;
+                        border-radius: 4px;
+                        width: parent.width;
+                        height: parent.height;
+
+                        Text {
+                            text: "Delete";
+                            color: #FFFFFF;
+                            font-size: 11px;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    clicked => {
+                        root.queue-item-removed(root.delete-confirm-id);
+                        root.delete-confirm-id = "";
+                    }
+                }
+
+                TouchArea {
+                    width: 70px;
+                    height: 32px;
+
+                    Rectangle {
+                        background: #292B30;
+                        border-radius: 4px;
+                        width: parent.width;
+                        height: parent.height;
+
+                        Text {
+                            text: "Cancel";
+                            color: #C8C9CE;
+                            font-size: 11px;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    clicked => {
+                        root.delete-confirm-id = "";
+                    }
                 }
             }
         }
