@@ -23,6 +23,7 @@ queue.json
 *.queue.json
 *.state.json
 *.pid
+.kilo
 
 # Logs
 logs/

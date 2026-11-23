@@ -105,10 +105,11 @@ Set the release version in the repository-root `app-version.json` and
 scripts from PowerShell:
 
 ```powershell
-.\scripts\build-backend.ps1
-.\scripts\build-desktop.ps1
-.\scripts\publish-package.ps1
+.\scripts\build-release.ps1
 ```
+
+This runs the backend build, Desktop build, and package publishing steps in
+order. To rebuild only one component, run its individual script instead.
 
 Before building the backend, put `mpv.exe` and `mpv-register.bat` in
 `vendor\mpv\`, or set `CYPHERSR_MPV_SOURCE` to their folder.
