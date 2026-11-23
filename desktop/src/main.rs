@@ -43,7 +43,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     // Only one desktop instance may reach this point.
-    if desktop_updater::check_and_apply_update() {
+    if !cfg!(debug_assertions) && desktop_updater::check_and_apply_update() {
         // PowerShell is waiting for this process to exit before replacing the EXE.
         return Ok(());
     }
@@ -58,12 +58,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Only the instance holding the mutex can reach this point.
     // Start the updater after the single-instance check.
-    let backend_patcher = match launcher::launch_backend_patcher() {
-        Ok(process) => process,
-        Err(error) => {
-            launcher::show_error_dialog(&format!("Could not start CypherSR updater:\n\n{error}"));
+    let backend_patcher = if cfg!(debug_assertions) {
+        println!("[Launcher] Debug build; start the backend separately.");
+        None
+    } else {
+        match launcher::launch_backend_patcher() {
+            Ok(process) => Some(process),
+            Err(error) => {
+                launcher::show_error_dialog(&format!(
+                    "Could not start CypherSR updater:\n\n{error}"
+                ));
 
-            return Err(error.into());
+                return Err(error.into());
+            }
         }
     };
 
@@ -90,6 +97,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     ui_bridge::setup_window_controls(&ui, video_controller.clone());
     ui_bridge::setup_overlay_actions(&ui, api_base_url.clone());
+    ui_bridge::setup_queue_actions(&ui, api_base_url.clone());
     player_controls::setup_playback_controls(
         &ui,
         api_base_url.clone(),

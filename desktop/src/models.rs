@@ -10,6 +10,7 @@ pub struct QueueResponse {
 
 #[derive(Debug, Deserialize)]
 pub struct QueueEntry {
+    pub id: String,
     pub query: String,
     pub requester: Option<Requester>,
     pub track: Option<Track>,
@@ -17,6 +18,7 @@ pub struct QueueEntry {
 
 #[derive(Debug, Deserialize)]
 pub struct Requester {
+    pub id: String,
     #[serde(rename = "displayName")]
     pub display_name: String,
 }
@@ -107,6 +109,7 @@ pub struct UiSnapshot {
     pub playback: PlaybackState,
     pub control: Option<PlayerControl>,
     pub queue_items: Vec<String>,
+    pub queue_item_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default)]

@@ -179,6 +179,12 @@ pub fn fetch_snapshot(
         })
         .collect();
 
+    let queue_item_ids: Vec<String> = queue
+        .pending
+        .iter()
+        .map(|entry| entry.id.clone())
+        .collect();
+
     Ok(UiSnapshot {
         // This is backend/player API connectivity, not Twitch connectivity.
         connected: true,
@@ -189,6 +195,7 @@ pub fn fetch_snapshot(
         playback: player.playback,
         control: player.control,
         queue_items,
+        queue_item_ids,
     })
 }
 
@@ -256,6 +263,56 @@ pub fn skip(api_base_url: String) {
         match result {
             Ok(()) => println!("[Playback] Skip request accepted."),
             Err(error) => eprintln!("[Playback] Skip request failed: {error}"),
+        }
+    });
+}
+
+/// Request removal of a queue item by request ID.
+pub fn remove_queue_item(api_base_url: String, request_id: String) {
+    thread::spawn(move || {
+        let result = create_client().and_then(|client| {
+            client
+                .post(format!(
+                    "{}/api/queue/remove",
+                    api_base_url.trim_end_matches('/')
+                ))
+                .json(&serde_json::json!({ "requestId": request_id }))
+                .send()
+                .and_then(|response| response.error_for_status())
+                .map(|_| ())
+                .map_err(|error| error.to_string())
+        });
+
+        match result {
+            Ok(()) => println!("[Queue] Remove request accepted for {request_id}."),
+            Err(error) => eprintln!("[Queue] Remove request failed: {error}"),
+        }
+    });
+}
+
+/// Request moving a queue item up or down.
+pub fn move_queue_item(api_base_url: String, request_id: String, direction: &str) {
+    let api_base_url = api_base_url.clone();
+    let request_id = request_id.clone();
+    let direction = direction.to_owned();
+
+    thread::spawn(move || {
+        let result = create_client().and_then(|client| {
+            client
+                .post(format!(
+                    "{}/api/queue/move",
+                    api_base_url.trim_end_matches('/')
+                ))
+                .json(&serde_json::json!({ "requestId": request_id, "direction": direction }))
+                .send()
+                .and_then(|response| response.error_for_status())
+                .map(|_| ())
+                .map_err(|error| error.to_string())
+        });
+
+        match result {
+            Ok(()) => println!("[Queue] Move {direction} request accepted for {request_id}."),
+            Err(error) => eprintln!("[Queue] Move {direction} request failed: {error}"),
         }
     });
 }

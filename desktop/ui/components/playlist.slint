@@ -3,9 +3,13 @@ import { ScrollView } from "std-widgets.slint";
 
 export component Playlist inherits Rectangle {
     in property <[string]> queue-items: [];
+    in property <[string]> queue-item-ids: [];
     in-out property <int> selected-queue-index: -1;
 
     callback queue-item-selected(int);
+    callback queue-item-removed(string);
+    callback queue-item-moved-up(string);
+    callback queue-item-moved-down(string);
 
     background: #151619;
     border-width: 1px;
@@ -72,6 +76,88 @@ export component Playlist inherits Rectangle {
                             overflow: elide;
                             vertical-alignment: center;
                             horizontal-stretch: 1;
+                        }
+
+                        TouchArea {
+                            width: 20px;
+                            height: 20px;
+
+                            Rectangle {
+                                background: root.selected-queue-index == index
+                                    ? #ff8299
+                                    : #292B30;
+                                border-radius: 3px;
+                                width: parent.width;
+                                height: parent.height;
+
+                                Text {
+                                    text: "✕";
+                                    color: #F0F0F2;
+                                    font-size: 11px;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+                            }
+
+                            clicked => {
+                                root.queue-item-removed(root.queue-item-ids[index]);
+                            }
+                        }
+
+                        TouchArea {
+                            width: 20px;
+                            height: 20px;
+
+                            Rectangle {
+                                background: root.selected-queue-index == index
+                                    ? #0077C2
+                                    : #292B30;
+                                border-radius: 3px;
+                                width: parent.width;
+                                height: parent.height;
+
+                                Text {
+                                    text: "▲";
+                                    color: #F0F0F2;
+                                    font-size: 10px;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+                            }
+
+                            clicked => {
+                                if index > 0 {
+                                    root.queue-item-moved-up(root.queue-item-ids[index]);
+                                }
+                            }
+                        }
+
+                        TouchArea {
+                            width: 20px;
+                            height: 20px;
+
+                            Rectangle {
+                                background: root.selected-queue-index == index
+                                    ? #0077C2
+                                    : #292B30;
+                                border-radius: 3px;
+                                width: parent.width;
+                                height: parent.height;
+
+                                Text {
+                                    text: "▼";
+                                    color: #F0F0F2;
+                                    font-size: 10px;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+                            }
+
+                            clicked => {
+                                if index < root.queue-items.length - 1 {
+                                    root.queue-item-moved-down(root.queue-item-ids[index]);
+                                }
+                            }
                         }
                     }
                 }

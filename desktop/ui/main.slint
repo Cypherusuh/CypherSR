@@ -31,6 +31,7 @@ export component MainWindow inherits Window {
     in-out property <string> current-track: "Nothing playing";
     in-out property <string> current-artist: "Request a song to start playback";
     in-out property <[string]> queue-items: [];
+    in-out property <[string]> queue-item-ids: [];
     in-out property <int> selected-queue-index: -1;
     in-out property <bool> overlays-expanded: false;
     in-out property <bool> video-visible: false;
@@ -61,6 +62,9 @@ export component MainWindow inherits Window {
     callback open-creator-link();
     callback copy-overlay-url(string) -> bool;
     callback queue-item-selected(int);
+    callback queue-item-removed(string);
+    callback queue-item-moved-up(string);
+    callback queue-item-moved-down(string);
 
     changed current-media-url => {
         if (root.video-visible && root.current-media-url != "") {
@@ -197,10 +201,23 @@ export component MainWindow inherits Window {
                     vertical-stretch: 0;
 
                     queue-items: root.queue-items;
+                    queue-item-ids: root.queue-item-ids;
                     selected-queue-index <=> root.selected-queue-index;
 
                     queue-item-selected(index) => {
                         root.queue-item-selected(index);
+                    }
+
+                    queue-item-removed(id) => {
+                        root.queue-item-removed(id);
+                    }
+
+                    queue-item-moved-up(id) => {
+                        root.queue-item-moved-up(id);
+                    }
+
+                    queue-item-moved-down(id) => {
+                        root.queue-item-moved-down(id);
                     }
                 }
 

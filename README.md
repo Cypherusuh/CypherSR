@@ -72,6 +72,32 @@ The local HTTP API reports Twitch authentication and connection status. By defau
 - An internet connection and a Twitch account
 - OBS Studio for browser-source overlays
 
+## Running from source
+
+The backend and desktop can be built and run independently. Configure Twitch
+credentials in the root `.env` file first. In one PowerShell window, from the
+repository root, start the backend:
+
+```powershell
+npm ci
+npm run build
+npm start
+```
+
+For backend development with automatic restarts, use `npm run dev` instead of
+the build and start commands. In a second window, build and run the desktop:
+
+```powershell
+cargo build --manifest-path .\desktop\Cargo.toml
+cargo run --manifest-path .\desktop\Cargo.toml
+```
+
+Debug desktop runs do not check for desktop updates or launch the bundled
+backend updater, so the separately started backend remains in use. Both apps
+default to `http://127.0.0.1:8765`; keep their host and port settings aligned.
+Send a `!sr <URL/title>` request in the configured Twitch channel to populate
+the desktop playlist and test reordering or removing requests.
+
 ## Building releases
 
 Set the release version in the repository-root `app-version.json` and

@@ -70,6 +70,48 @@ pub(crate) fn setup_overlay_actions(ui: &MainWindow, api_base_url: String) {
     });
 }
 
+pub(crate) fn setup_queue_actions(ui: &MainWindow, api_base_url: String) {
+    let removed_url = api_base_url.clone();
+    let up_url = api_base_url.clone();
+    let down_url = api_base_url;
+
+    let weak_ui = ui.as_weak();
+
+    ui.on_queue_item_removed(move |request_id| {
+        let api_base_url = removed_url.clone();
+        let weak_ui = weak_ui.clone();
+
+        let _ = slint::invoke_from_event_loop(move || {
+            let _ = weak_ui;
+            backend::remove_queue_item(api_base_url, request_id.to_string());
+        });
+    });
+
+    let weak_ui = ui.as_weak();
+
+    ui.on_queue_item_moved_up(move |request_id| {
+        let api_base_url = up_url.clone();
+        let weak_ui = weak_ui.clone();
+
+        let _ = slint::invoke_from_event_loop(move || {
+            let _ = weak_ui;
+            backend::move_queue_item(api_base_url, request_id.to_string(), "up");
+        });
+    });
+
+    let weak_ui = ui.as_weak();
+
+    ui.on_queue_item_moved_down(move |request_id| {
+        let api_base_url = down_url.clone();
+        let weak_ui = weak_ui.clone();
+
+        let _ = slint::invoke_from_event_loop(move || {
+            let _ = weak_ui;
+            backend::move_queue_item(api_base_url, request_id.to_string(), "down");
+        });
+    });
+}
+
 pub(crate) fn start_backend_polling(
     ui: &MainWindow,
     playback_sync: Arc<Mutex<PlaybackSyncState>>,
@@ -120,6 +162,15 @@ pub(crate) fn start_backend_polling(
 
             let model = Rc::new(VecModel::from(items));
             ui.set_queue_items(ModelRc::from(model));
+
+            let ids: Vec<SharedString> = snapshot
+                .queue_item_ids
+                .into_iter()
+                .map(SharedString::from)
+                .collect();
+
+            let id_model = Rc::new(VecModel::from(ids));
+            ui.set_queue_item_ids(ModelRc::from(id_model));
 
             ui.set_playback_position(snapshot.playback.position as f32);
             ui.set_playback_duration(snapshot.playback.duration as f32);

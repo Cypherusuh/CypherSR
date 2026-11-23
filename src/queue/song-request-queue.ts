@@ -155,16 +155,30 @@ export class SongRequestQueue {
   }
 
   removeLatestPendingByUser(userId: string): SongRequest | null {
-    for (let index = this.pending.length - 1; index >= 0; index--) {
+    let latest: SongRequest | null = null;
+    let latestIndex = -1;
+
+    for (let index = 0; index < this.pending.length; index++) {
       const request = this.pending[index];
 
       if (request?.requester.id === userId) {
-        this.pending.splice(index, 1);
-        return request;
+        if (
+          !latest ||
+          new Date(request.requestedAt).getTime() >
+            new Date(latest.requestedAt).getTime()
+        ) {
+          latest = request;
+          latestIndex = index;
+        }
       }
     }
 
-    return null;
+    if (latestIndex === -1) {
+      return null;
+    }
+
+    this.pending.splice(latestIndex, 1);
+    return latest;
   }
 
   moveUp(id: string): boolean {
