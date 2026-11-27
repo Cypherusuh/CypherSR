@@ -120,6 +120,16 @@ export class PlaybackCoordinator {
   }
 
   async trackEnded(requestId: string): Promise<boolean> {
+    const current = this.getPlayerState('').current;
+
+    if (
+      current?.source === 'default' &&
+      current.requestId === requestId
+    ) {
+      this.defaultRestartRevision += 1;
+      return true;
+    }
+
     return this.finishTrack(requestId);
   }
 

@@ -226,9 +226,7 @@
         video.volume = volume;
         video.muted = volume === 0;
 
-        // Default playback loops in the browser, independently of mpv's
-        // position telemetry. Seeking it back to mpv's position would fight
-        // the loop near the end of each pass.
+        // Let default media reach EOF so the coordinator can restart it.
         if (currentSource !== 'default') {
           const targetPosition = getTargetPosition(playback);
           const duration = Number.isFinite(video.duration) && video.duration > 0
@@ -314,9 +312,9 @@
         currentMediaUrl = null;
         currentSource = 'request';
         endedRequestId = null;
-        video.loop = false;
 
         video.pause();
+        video.loop = false;
         video.removeAttribute('src');
         video.load();
       }
@@ -368,9 +366,9 @@
             currentMediaUrl = track.mediaUrl;
             currentSource = track.source === 'default' ? 'default' : 'request';
             endedRequestId = null;
-            video.loop = currentSource === 'default';
 
             video.pause();
+            video.loop = false;
             video.src = track.mediaUrl;
             video.load();
 
@@ -398,7 +396,6 @@
 
         if (
           !requestId ||
-          currentSource === 'default' ||
           endedRequestId === requestId
         ) {
           return;

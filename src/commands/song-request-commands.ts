@@ -77,7 +77,7 @@ export function createSongRequestCommands(
     {
       name: 'default',
       description: 'Set, show, or clear the default song.',
-      handler: async (message, args) => {
+      handler: async (message, args, sendStatus) => {
         const argument = args.join(' ').trim();
 
         if (!argument) {
@@ -104,6 +104,8 @@ export function createSongRequestCommands(
             return reply('Failed to clear the default song. Check the application logs.');
           }
         }
+
+        await sendStatus?.('Looking up default song, might takes awhile');
 
         try {
           return reply(await actions.setDefaultSong(argument));
