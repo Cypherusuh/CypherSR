@@ -5,6 +5,8 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
+#[macro_use]
+mod logging;
 mod backend;
 mod config;
 mod desktop_updater;
@@ -19,7 +21,14 @@ use video_preview::VideoPreviewController;
 
 slint::include_modules!();
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() {
+    if let Err(error) = run() {
+        eprintln!("[Desktop] Fatal error: {error}");
+        std::process::exit(1);
+    }
+}
+
+fn run() -> Result<(), Box<dyn std::error::Error>> {
     // Acquire the single-instance lock BEFORE starting the updater.
     let _single_instance = match launcher::acquire_single_instance() {
         Ok(handle) => handle,
@@ -43,6 +52,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     // Only one desktop instance may reach this point.
+    let log_path = match logging::initialize() {
+        Ok(path) => path,
+        Err(error) => {
+            launcher::show_error_dialog(&format!(
+                "Could not initialize the desktop debug log:\n\n{error}"
+            ));
+
+            return Err(error.into());
+        }
+    };
+    println!("[Logging] Writing desktop logs to {}", log_path.display());
+
     if !cfg!(debug_assertions) && desktop_updater::check_and_apply_update() {
         // PowerShell is waiting for this process to exit before replacing the EXE.
         return Ok(());
