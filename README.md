@@ -117,8 +117,10 @@ default; requests are rejected when either limit is reached.
   not muted in OBS. The desktop preview by itself is not a substitute for the
   Player browser source in your stream.
 - **Need to report a problem:** On Full, attach the latest log at
-  `%LOCALAPPDATA%\CypherSR\Desktop\debug.log` when
-  [opening an issue](https://github.com/Cypherusuh/CypherSR/issues).
+  `CypherSR Desktop\logs\debug.log` (beside the desktop app) when
+  [opening an issue](https://github.com/Cypherusuh/CypherSR/issues). It contains
+  both desktop (`[front]`) and backend (`[back]`) messages; the previous two
+  logs are kept as `debug.1.log` and `debug.2.log`.
 
 ## Support
 
