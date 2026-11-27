@@ -1,197 +1,125 @@
 # CypherSR
 
-A portable Twitch song request player for Windows, built for streamers using OBS.
+CypherSR lets viewers request songs in Twitch chat and plays them on your
+stream. It includes a Windows desktop app, an optional lightweight package, and
+browser overlays for OBS.
 
-## Download
+## What you need
 
-**[Download the latest release](https://github.com/Cypherusuh/CypherSR/releases/latest)**
+- A Windows 64-bit computer with an internet connection.
+- A Twitch account for the channel that will use song requests.
+- OBS Studio if you want to show the player, queue, or song information on
+  stream.
 
-- **FULL** — For users who want the desktop app with the video player.
-- **LITE** — For potato laptops or low-end PCs. Lightweight version without the desktop video player.
+## Download and start
 
-Download the latest version from the [Releases page](https://github.com/Cypherusuh/CypherSR/releases/latest) and choose the package that fits your needs.
+Download the latest release from the
+[CypherSR Releases page](https://github.com/Cypherusuh/CypherSR/releases/latest).
+Choose one package:
 
-## Features
+- **Full** — Recommended. Includes the desktop app, native video preview,
+  playlist controls, and OBS overlay URL buttons.
+- **Lite** — Backend only. Choose this if you do not need the desktop window;
+  use the browser overlays to play songs and show information in OBS.
 
-- **Song requests:** `!sr <URL/title>` supports YouTube and Spotify links.
-- **Default song:** Keep a song playing when the request queue is empty.
-- **Queue management:** `!queue`, `!skip`, and `!wrongsong`.
-- **Radio mode:** Toggle song requests and playback with `!radio`.
-- **OBS overlays:** Browser sources for the player, queue, and recently played track.
-- **Twitch connection status:** Check authentication and connection state through the local HTTP API.
-- **Rust launcher:** Checks for app and bundled media-tool updates before starting the app.
+1. Download the package ZIP and extract it to a folder you can write to, such as
+   `Documents\CypherSR`. Do not run the app from inside the ZIP.
+2. For **Full**, open `CypherSR-Desktop.exe`. For **Lite**, open
+   `CypherSR-Updater.exe`.
+3. Keep the app running while you stream. The Full app starts the song service
+   for you; Lite starts it with the updater.
+4. On first launch, connect the Twitch account for your channel and approve
+   access when Twitch asks. In Full, use **Connect** in the top bar if needed.
+   The status should change to **Online** when the connection is ready.
 
-## Installation
+CypherSR checks for available updates when it starts. Keep the extracted
+package together so the app can find its files.
 
-1. Download the latest full portable ZIP from the [latest release](https://github.com/Cypherusuh/CypherSR/releases/latest).
-2. Extract the ZIP into a writable folder.
-3. Run `CypherSR-Updater.exe`. The Rust launcher checks for app and bundled media-tool updates, then starts `CypherSR-Core.exe`. On first run, follow the Twitch login instructions.
-4. Add the printed browser source URLs to OBS.
+### Save your setup
 
-For the standalone LITE package, keep `CypherSR-Updater.exe`,
-`CypherSR-Core.exe`, `public/`, and `vendor/` together, and launch the app with
-`CypherSR-Updater.exe` to receive updates. If an update check fails, the launcher
-reports the error and tries to start the installed version.
+CypherSR keeps its settings, Twitch sign-in, and default-song files in the
+package's `data` folder. In Full this is `backend\data`; in Lite it is
+`data`. Keep this folder when updating or moving the app. Copy it somewhere
+safe if you want a backup.
 
-The FULL desktop package keeps the updater, core, `public/`, and `vendor/`
-together inside `backend/`. Its launcher sets `SONG_REQUEST_RUNTIME_HOME` to
-that directory so the backend resolves assets and update files beside its
-binaries. Persistent data is stored in `backend/data/`, shared with the
-standalone backend version through `SONG_REQUEST_HOME`. On first launch after
-upgrading, files from the legacy Desktop-level `data/` directory are merged
-into `backend/data/` without overwriting files already there. Do not delete
-`backend/data/`; it stores backend configuration, authentication, and cached
-media.
+## Add overlays to OBS
 
-## Commands
+The overlays are transparent browser pages served by CypherSR. Start CypherSR
+before adding them. In OBS, add a **Browser** source and paste the overlay URL:
 
-| Command | Description |
-|---|---|
-| `!sr <URL/title>` | Request a song |
-| `!radio` | Toggle radio and requests |
-| `!queue` | Show the current track and queue |
-| `!skip` | Skip the current track (moderators/broadcaster) |
-| `!default` | Show the default song |
-| `!default <URL>` | Set the default song (broadcaster) |
-| `!default clear` | Clear the default song (broadcaster) |
-| `!wrongsong` | Remove your latest pending request |
-
-## Twitch connection status
-
-The local HTTP API reports Twitch authentication and connection status. By default, the server listens on `http://127.0.0.1:8765` (the address and port can be changed in `data/config.json`).
-
-| Method | Endpoint | Description |
+| Overlay | Default URL | What it shows |
 |---|---|---|
-| `GET` | `/api/twitch/status` | Returns `authenticated`, `connecting`, `connected`, `username`, and `error` |
-| `POST` | `/api/twitch/connect` | Starts a Twitch connection |
-| `POST` | `/api/twitch/disconnect` | Disconnects from Twitch |
+| Player | `http://127.0.0.1:8765/player.html` | Song video and audio |
+| Queue | `http://127.0.0.1:8765/queue.html` | The current request and waiting requests |
+| Played Now | `http://127.0.0.1:8765/played-now.html` | Current song title, artist, and progress |
 
-## Requirements
+In the Full desktop app, expand **OBS Overlays** and click **Copy URL** next to
+the overlay you want. Paste that URL into the OBS Browser source. The copied
+URL uses your current server settings; the default addresses above work with a
+standard setup.
 
-- Windows x64
-- An internet connection and a Twitch account
-- OBS Studio for browser-source overlays
+Use the **Player** source for stream audio/video. Make sure the source is
+active in OBS and its audio is not muted. The **Test** page
+(`http://127.0.0.1:8765/browser-player.html`) is for checking playback in a
+regular browser; it is not normally added as an OBS overlay.
 
-## Running from source
+## Full desktop app
 
-The backend and desktop can be built and run independently. Configure Twitch
-credentials in the root `.env` file first. In one PowerShell window, from the
-repository root, start the backend:
+The Full app includes:
 
-```powershell
-npm ci
-npm run build
-npm start
-```
+- **Twitch status** in the title bar, with Connect, Disconnect, and Retry
+  controls.
+- **Now Playing** information and a native video preview that you can show or
+  hide.
+- **Playback controls** for play/pause, seeking, and volume, plus a Skip button.
+- **Playlist controls** to move waiting songs up or down and remove them.
+- **OBS Overlays** buttons that copy the Player, Queue, and Played Now URLs.
 
-For backend development with automatic restarts, use `npm run dev` instead of
-the build and start commands. In a second window, build and run the desktop:
+The Lite package does not include this desktop window. It can still play songs
+through the Player browser source and provide the Queue and Played Now overlays.
 
-```powershell
-cargo build --manifest-path .\desktop\Cargo.toml
-cargo run --manifest-path .\desktop\Cargo.toml
-```
+## Twitch chat commands
 
-Debug desktop runs do not check for desktop updates or launch the bundled
-backend updater, so the separately started backend remains in use. Both apps
-default to `http://127.0.0.1:8765`; keep their host and port settings aligned.
-Send a `!sr <URL/title>` request in the configured Twitch channel to populate
-the desktop playlist and test reordering or removing requests.
+Commands use `!` by default. Viewers can request songs while request mode is
+enabled. YouTube links or song searches are supported; individual Spotify track
+links are also accepted. Spotify links are matched to a playable YouTube
+version; Spotify playlists are not supported.
 
-## Building releases
+| Command | Who can use it | What it does |
+|---|---|---|
+| `!sr <URL or song title>` | Everyone, when requests are enabled | Add a song request. |
+| `!song <URL or song title>` | Same as `!sr` | Alias for `!sr`. |
+| `!radio` | Broadcaster | Turn new song requests on or off. Requests are enabled when the service starts. |
+| `!queue` | Everyone | Show the current request and waiting requests. |
+| `!q` | Everyone | Alias for `!queue`. |
+| `!skip` | Moderators and broadcaster | Skip the current requested song. If the default song is playing with no waiting requests, it starts again. |
+| `!default` | Everyone | Show the configured default song. |
+| `!default <URL or song title>` | Broadcaster | Set the default song. The bot posts a lookup status while it prepares the song. |
+| `!default clear` | Broadcaster | Remove the default song. |
+| `!wrongsong` | The person who requested it | Remove your most recent waiting request. It cannot remove a song that is already playing. |
 
-Set the release version in the repository-root `app-version.json` and
-`desktop\Cargo.toml` to the same value (for example, `1.3.0`), then run these
-scripts from PowerShell:
+The default song plays when no requested song is active and repeats when it
+reaches the end. Requests can take a little while to look up and prepare. The
+queue allows up to 10 waiting songs in total and 2 waiting songs per viewer by
+default; requests are rejected when either limit is reached.
 
-```powershell
-.\scripts\build-release.ps1
-```
+## Troubleshooting
 
-This runs the backend build, Desktop build, and package publishing steps in
-order. To rebuild only one component, run its individual script instead.
-
-Before building the backend, put `mpv.exe` and `mpv-register.bat` in
-`vendor\mpv\`, or set `CYPHERSR_MPV_SOURCE` to their folder.
-Artifacts are grouped under `release\v<version>\`: `Published App\` contains
-the runnable package, `Publishing zip\` contains release ZIPs and `latest.json`,
-`Backend Build\` contains backend binaries and assets, and `Desktop Build\`
-contains the desktop executable. The `versioning\` folder contains
-`desktop.json`, `backend.json`, and `vendor.json`. Existing `release\data\`
-and package-local `data\` are preserved, and data directories are excluded
-from release archives.
-
-For a combined Desktop release, upload the contents of `Publishing zip\` and
-`Desktop Build\CypherSR-Desktop-GUI-v<version>-win-x64.exe` to a GitHub release
-whose tag is exactly `v<version>` (for example, `v1.2.1`). This is a transition
-release: the new updater downloads and verifies
-`CypherSR-Desktop-GUI-v<version>-win-x64.zip` (ZIP containing
-`CypherSR-Desktop.exe`), extracts it in `.tmp\desktop-update\`, stages the
-executable, replaces the running executable on exit, and removes
-`.tmp\desktop-update\` afterward. The same ZIP is used for manual installation.
-The separate `...-win-x64.exe` asset is kept so already-installed (old)
-updaters can still update; include it with the exact name. Include
-`latest.json` and all the ZIPs from `Publishing zip\`, then mark the combined
-release as the latest release so the backend updater can find its manifest.
-
-After uploading the release assets and marking the release as latest, run
-`.\scripts\verify-release.ps1`. It checks the public GitHub release, required
-assets (including the transition EXE), manifest URLs, and SHA-256 digests. Do
-not announce the release unless this verification passes.
-
-To repair an existing release for installed updaters, rerun
-`.\scripts\publish-package.ps1` after generating the required build artifacts.
-Upload the regenerated `latest.json`, all package ZIPs from `Publishing zip\`,
-and `Desktop Build\CypherSR-Desktop-GUI-v<version>-win-x64.exe` with their
-exact names. Make the release the latest release and remove or replace
-stale/mistyped Desktop GUI updater assets if necessary. `Desktop Build\`
-contains `CypherSR-Desktop.exe` and the transition updater EXE, and
-`Backend Build\` contains backend executables, `version.json`, and
-`latest.json`. `Published App\` is the ready-to-run portable package.
-`versioning\` and `versioning.json` are per-component version sources used by
-the build scripts and future manifest updates. If `Backend Build\` or
-`Desktop Build\` is missing, run `build-backend.ps1` and/or `build-desktop.ps1`
-first. If `versioning\` files or `versioning.json` are missing, use
-`app-version.json` and rebuild the missing release component. If the packaging
-scripts cannot find `latest.json`, place the backend manifest in
-`Backend Build\`, regenerate it with `build-backend.ps1`, or restore it from the
-release assets. `version.json` and `latest.json` remain in use for the current
-updater path. `versioning.json` is the future unified manifest format kept in
-sync for upcoming updater and packaging changes. Existing runtime data, saved
-vendor runtime files, and user-provided FFmpeg or MPV files are preserved by
-the launcher and updater when possible. Sensitive runtime data can be stored in
-the OS credential store; files under `data/` remain on disk. `data/` must
-never be included in a build, package, ZIP, or release upload. If the Desktop
-GUI fails to open, the launcher continues running headlessly.
-
-For a standalone backend release, upload the ZIPs from `Publishing zip\` and
-`latest.json` from `Backend Build\`. `Published App\` is the ready-to-run
-portable package.
-
-## Linux backend package (Arch/EndeavourOS)
-
-The backend-only Arch package can be built with `makepkg` from
-`packaging/arch\`. It is designed for Arch Linux and Arch-based distributions
-such as EndeavourOS; the Windows desktop app is not included.
-
-The package uses Arch's `yt-dlp` and `ffmpeg` packages, installs the backend
-under `/usr/lib/cyphersr/`, and keeps runtime data under
-`~/.local/share/cyphersr/`. From an Arch-based system with the repository
-checked out:
-
-```sh
-cd packaging/arch
-makepkg -si
-```
-
-Run the backend with `cyphersr-backend`. The package recipe is an initial
-in-repository build recipe; pin its source to a released commit before
-publishing it to the AUR.
+- **The app is not responding to chat:** Check that Twitch shows **Online**.
+  If requests were turned off with `!radio`, the broadcaster can use `!radio`
+  again to turn them back on.
+- **Twitch is offline or reconnecting:** Check your internet connection. In the
+  Full app, click **Retry** if it appears.
+- **A song does not play:** Check the link or search text, then use `!queue` to
+  see whether the request was accepted. A full queue or an unavailable song can
+  prevent a request from being added.
+- **OBS has no song audio:** Confirm the Player browser source is active and
+  not muted in OBS. The desktop preview by itself is not a substitute for the
+  Player browser source in your stream.
+- **Need to report a problem:** On Full, attach the latest log at
+  `%LOCALAPPDATA%\CypherSR\Desktop\debug.log` when
+  [opening an issue](https://github.com/Cypherusuh/CypherSR/issues).
 
 ## Support
 
-Found a bug or have a suggestion? [Open an issue](https://github.com/Cypherusuh/CypherSR/issues).
-
-## License
-
-See the repository's [LICENSE](https://github.com/Cypherusuh/CypherSR/blob/main/LICENSE).
+For help or to report a problem, [open an issue](https://github.com/Cypherusuh/CypherSR/issues).

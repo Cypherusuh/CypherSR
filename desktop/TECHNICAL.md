@@ -27,6 +27,9 @@ implement Twitch chat ingestion, song-request submission, or queue management.
 - `config.toml` stores the backend address and playback-related settings,
   including the configured mpv executable path and persistent volume
   (`playback.volume`, from `0.0` to `1.0`; defaults to `0.4`).
+- Desktop console output and panic details are written to
+  `%LOCALAPPDATA%\CypherSR\Desktop\debug.log`. Each launch rotates the previous
+  two logs to `debug.1.log` and `debug.2.log`, deleting the oldest.
 
 In short, this app depends on a separate backend service to accept Twitch
 requests and maintain the queue. This repo is the desktop client; the exact

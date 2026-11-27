@@ -54,7 +54,7 @@ export class CommandRouter {
 
     try {
       const sendStatus =
-        command.name === 'sr'
+        command.name === 'sr' || command.name === 'default'
           ? (status: string) => this.sendReply(status)
           : undefined;
       const reply = await command.handler(message, args, sendStatus);
