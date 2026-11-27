@@ -119,6 +119,16 @@ foreach ($entry in $expectedManifestAssets) {
     }
 
     $asset = $assetByName[$entry.Name]
+    if ($entry.Name -in @($desktopUpdateName, $desktopTransitionExeName)) {
+        if ([string]::IsNullOrWhiteSpace([string]$asset.digest)) {
+            throw "GitHub did not provide a SHA-256 digest for Desktop updater asset '$($entry.Name)'."
+        }
+
+        if ([string]$asset.digest -notmatch '^sha256:[0-9a-fA-F]{64}$') {
+            throw "GitHub returned an invalid SHA-256 digest for Desktop updater asset '$($entry.Name)'."
+        }
+    }
+
     if (
         $asset.digest -and
         $asset.digest -ne "sha256:$($entry.Hash.ToLowerInvariant())"

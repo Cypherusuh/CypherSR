@@ -28,7 +28,10 @@ const BACKEND_DIRECTORY: &str = "backend";
 const DATA_DIRECTORY: &str = "data";
 const SONG_REQUEST_HOME_ENV: &str = "SONG_REQUEST_HOME";
 const SONG_REQUEST_RUNTIME_HOME_ENV: &str = "SONG_REQUEST_RUNTIME_HOME";
+#[cfg(not(feature = "local-updater-test"))]
 const SINGLE_INSTANCE_MUTEX: &str = "Local\\CypherSR.Desktop.SingleInstance";
+#[cfg(feature = "local-updater-test")]
+const SINGLE_INSTANCE_MUTEX: &str = "Local\\CypherSR.Desktop.LocalUpdaterTest.SingleInstance";
 
 /// Keeps the updater and its backend process alive for the desktop lifetime.
 pub struct BackendPatcher {
