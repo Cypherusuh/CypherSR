@@ -3,7 +3,8 @@ use std::mem::{size_of, zeroed};
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle, RawHandle};
 use std::os::windows::process::CommandExt;
 use std::path::Path;
-use std::process::{Child, Command};
+use std::process::{Child, Command, Stdio};
+use std::thread::JoinHandle;
 
 use windows_sys::Win32::Foundation::{
     CloseHandle, ERROR_ALREADY_EXISTS, GetLastError, HANDLE, INVALID_HANDLE_VALUE,
@@ -32,7 +33,16 @@ const SINGLE_INSTANCE_MUTEX: &str = "Local\\CypherSR.Desktop.SingleInstance";
 /// Keeps the updater and its backend process alive for the desktop lifetime.
 pub struct BackendPatcher {
     _child: Child,
-    _job: OwnedHandle,
+    job: Option<OwnedHandle>,
+    output_threads: Vec<JoinHandle<()>>,
+}
+
+impl Drop for BackendPatcher {
+    fn drop(&mut self) {
+        // Closing the job stops backend processes before their output readers are joined.
+        self.job.take();
+        join_backend_output_threads(std::mem::take(&mut self.output_threads));
+    }
 }
 
 pub fn acquire_single_instance() -> io::Result<OwnedHandle> {
@@ -232,6 +242,8 @@ pub fn launch_backend_patcher() -> Result<BackendPatcher, Box<dyn std::error::Er
         .current_dir(&runtime_dir)
         .env(SONG_REQUEST_HOME_ENV, &data_dir)
         .env(SONG_REQUEST_RUNTIME_HOME_ENV, &runtime_dir)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
         .creation_flags(CREATE_SUSPENDED | CREATE_NO_WINDOW)
         .spawn()
         .map_err(|error| {
@@ -246,6 +258,37 @@ pub fn launch_backend_patcher() -> Result<BackendPatcher, Box<dyn std::error::Er
 
     println!("[Launcher] Updater created suspended (PID {}).", child.id());
 
+    let stdout = match child.stdout.take() {
+        Some(stdout) => stdout,
+        None => {
+            terminate_child(&mut child);
+            return Err(io::Error::other("Updater stdout pipe was not created").into());
+        }
+    };
+    let stderr = match child.stderr.take() {
+        Some(stderr) => stderr,
+        None => {
+            terminate_child(&mut child);
+            return Err(io::Error::other("Updater stderr pipe was not created").into());
+        }
+    };
+    let stdout_thread = match crate::logging::spawn_backend_reader(stdout, false) {
+        Ok(thread) => thread,
+        Err(error) => {
+            terminate_child(&mut child);
+            return Err(error.into());
+        }
+    };
+    let stderr_thread = match crate::logging::spawn_backend_reader(stderr, true) {
+        Ok(thread) => thread,
+        Err(error) => {
+            terminate_child(&mut child);
+            join_backend_output_threads(vec![stdout_thread]);
+            return Err(error.into());
+        }
+    };
+    let output_threads = vec![stdout_thread, stderr_thread];
+
     let assigned = unsafe { AssignProcessToJobObject(job_handle, child.as_raw_handle() as HANDLE) };
     if assigned == 0 {
         let error = io::Error::other(format!(
@@ -253,21 +296,32 @@ pub fn launch_backend_patcher() -> Result<BackendPatcher, Box<dyn std::error::Er
             io::Error::last_os_error()
         ));
         terminate_child(&mut child);
+        join_backend_output_threads(output_threads);
         return Err(error.into());
     }
 
     println!("[Launcher] Updater assigned to Job Object.");
 
-    resume_suspended_process(child.id()).map_err(|error| {
+    if let Err(error) = resume_suspended_process(child.id()) {
         terminate_child(&mut child);
-        error
-    })?;
+        join_backend_output_threads(output_threads);
+        return Err(error.into());
+    }
     println!("[Launcher] Updater resumed successfully.");
 
     Ok(BackendPatcher {
         _child: child,
-        _job: job,
+        job: Some(job),
+        output_threads,
     })
+}
+
+fn join_backend_output_threads(threads: Vec<JoinHandle<()>>) {
+    for thread in threads {
+        if thread.join().is_err() {
+            crate::logging::write_backend_stderr("Backend output reader thread panicked.");
+        }
+    }
 }
 
 fn merge_legacy_data(source: &Path, destination: &Path) -> io::Result<()> {
