@@ -92,32 +92,33 @@ searches stable releases for the highest-version desktop executable asset named
 `CypherSR-Desktop-GUI-vX.Y.Z-win-x64.exe`, rather than assuming the
 repository's latest release is a desktop release.
 
-Normal production builds only check GitHub. Local updater testing is isolated
-behind the `local-updater-test` Cargo feature and reads the published ZIP:
-
-`./release/vX.Y.Z/Publishing zip/CypherSR-Desktop-GUI-vX.Y.Z-win-x64.zip`
-
-To test without replacing a historical release, copy its `Published App`
-version folder to a separate sibling (for example,
-`release/v1.2.3 copy`). Build the feature-enabled test executable:
+Normal production builds only check GitHub. To check whether an older updater
+can install a locally built release, run the historical-updater harness from
+the repository root:
 
 ```powershell
-cargo build --manifest-path desktop\Cargo.toml --features local-updater-test
+.\scripts\test-desktop-updater.ps1 -FromVersion 1.2.2 -TargetVersion 1.2.3
 ```
 
-Replace the executable in the copied app's `Published App\CypherSR Desktop`
-folder with `desktop\target\debug\CypherSR-Desktop.exe`. From the repository
-root, set `CYPHERSR_LOCAL_UPDATE_TEST_CURRENT_VERSION` to the copied app's
-version and launch that executable. For example:
+The harness builds the updater source at tag `v<FromVersion>` in a temporary
+Git worktree, adding only a local-ZIP test input. The historical extraction
+function remains unchanged. It copies the selected ZIP from
+`release/v<TargetVersion>/Publishing zip/` and runs the old updater from an
+isolated `%TEMP%` install directory. For example, the command above tests the
+v1.2.2 updater against the local v1.2.3 ZIP.
 
-```powershell
-$env:CYPHERSR_LOCAL_UPDATE_TEST_CURRENT_VERSION = "1.2.3"
-& ".\release\v1.2.3 copy\Published App\CypherSR Desktop\CypherSR-Desktop.exe"
-```
+If extraction fails, the error is written under the test install's
+`.tmp\desktop-update\legacy-update-error.log`; updater stdout and stderr are
+captured in `legacy-updater-test.log` and `legacy-updater-stderr.log`. An
+unsuccessful update is reported as a nonzero script exit. If the update
+succeeds, the test executable is replaced but not relaunched. The result is
+recorded in `.tmp\desktop-update\legacy-update-result.log`. The temporary
+source worktree is removed after the test; the isolated install and its logs
+are retained. The test hook does not change the production updater or its
+GitHub-only behavior.
 
-The test build checks local ZIPs only, prompts before installing, and replaces
-only the executable inside the test copy; the normal production build remains
-GitHub-only.
+Use `-ReleaseRoot <path>` for another release tree or `-InstallDir <path>` for
+another isolated install inside `%TEMP%`.
 
 All components are built from this monorepo. The current release endpoints use
 `Cypherusuh/CypherSR`; changing repositories requires updating the publishers

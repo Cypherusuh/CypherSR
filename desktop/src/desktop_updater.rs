@@ -37,6 +37,10 @@ const DESKTOP_EXE_NAME: &str = "CypherSR-Desktop.exe";
 const LOCAL_PUBLISHING_ZIP_DIR: &str = "Publishing zip";
 #[cfg(feature = "local-updater-test")]
 const LOCAL_TEST_VERSION_ENV: &str = "CYPHERSR_LOCAL_UPDATE_TEST_CURRENT_VERSION";
+#[cfg(feature = "local-updater-test")]
+const LOCAL_TEST_RELEASE_DIR_ENV: &str = "CYPHERSR_LOCAL_UPDATE_TEST_RELEASE_DIR";
+#[cfg(feature = "local-updater-test")]
+const LOCAL_TEST_INSTALL_DIR_ENV: &str = "CYPHERSR_LOCAL_UPDATE_TEST_INSTALL_DIR";
 
 const DESKTOP_UPDATE_DIR: &str = ".tmp\\desktop-update";
 const STAGED_EXE_NAME: &str = "CypherSR-Desktop.exe";
@@ -46,6 +50,8 @@ const PARTIAL_EXE_NAME: &str = "CypherSR-Desktop.exe.part";
 const EXTRACT_DIR_NAME: &str = "extracted";
 const EXTRACT_SCRIPT_NAME: &str = "extract-desktop-update.ps1";
 const UPDATE_SCRIPT_NAME: &str = "replace-desktop.ps1";
+const UPDATE_RESULT_LOG_NAME: &str = "update-result.log";
+const UPDATE_ERROR_LOG_NAME: &str = "update-error.log";
 
 #[cfg(not(feature = "local-updater-test"))]
 const HTTP_TIMEOUT_SECS: u64 = 600;
@@ -220,6 +226,13 @@ pub fn check_and_apply_update() -> bool {
 
 #[cfg(feature = "local-updater-test")]
 pub fn check_and_apply_update() -> bool {
+    if let Err(error) = validate_local_test_install() {
+        show_error(&format!(
+            "Local updater tests must run from their isolated temporary install directory.\n\n{error}"
+        ));
+        return false;
+    }
+
     let current_version = match std::env::var(LOCAL_TEST_VERSION_ENV) {
         Ok(version) => version,
         Err(std::env::VarError::NotPresent) => env!("CYPHERSR_APP_VERSION").to_string(),
@@ -288,7 +301,7 @@ pub fn check_and_apply_update() -> bool {
 fn find_newer_local_desktop_update(
     current_version: &str,
 ) -> Result<Option<LocalDesktopUpdate>, Box<dyn std::error::Error>> {
-    find_newer_local_update_in_roots(&discover_local_release_roots(), current_version)
+    find_newer_local_update_in_roots(&discover_local_release_roots()?, current_version)
 }
 
 #[cfg(feature = "local-updater-test")]
@@ -348,8 +361,24 @@ fn find_newer_local_update_in_roots(
 }
 
 #[cfg(feature = "local-updater-test")]
-fn discover_local_release_roots() -> Vec<PathBuf> {
+fn discover_local_release_roots() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
     let mut roots = Vec::new();
+
+    if let Some(release_root) = std::env::var_os(LOCAL_TEST_RELEASE_DIR_ENV) {
+        let release_root = PathBuf::from(release_root);
+        if !release_root.is_dir() {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!(
+                    "Local updater test release directory does not exist: {}",
+                    release_root.display()
+                ),
+            )
+            .into());
+        }
+        push_unique_path(&mut roots, release_root);
+        return Ok(roots);
+    }
 
     match std::env::current_dir() {
         Ok(current_dir) => {
@@ -384,7 +413,7 @@ fn discover_local_release_roots() -> Vec<PathBuf> {
         }
     }
 
-    roots
+    Ok(roots)
 }
 
 #[cfg(feature = "local-updater-test")]
@@ -392,6 +421,50 @@ fn push_unique_path(paths: &mut Vec<PathBuf>, path: PathBuf) {
     if !paths.contains(&path) {
         paths.push(path);
     }
+}
+
+#[cfg(feature = "local-updater-test")]
+fn validate_local_test_install() -> io::Result<()> {
+    let configured_install_dir = std::env::var_os(LOCAL_TEST_INSTALL_DIR_ENV)
+        .ok_or_else(|| io::Error::other(format!("{LOCAL_TEST_INSTALL_DIR_ENV} is not set")))?;
+    let configured_install_dir = fs::canonicalize(PathBuf::from(configured_install_dir))?;
+    let executable = std::env::current_exe()?;
+    let executable_dir = executable
+        .parent()
+        .ok_or_else(|| io::Error::other("Could not determine the test executable directory"))?;
+    let executable_dir = fs::canonicalize(executable_dir)?;
+    let temporary_dir = fs::canonicalize(std::env::temp_dir())?;
+
+    validate_local_test_install_paths(&executable_dir, &configured_install_dir, &temporary_dir)
+}
+
+#[cfg(feature = "local-updater-test")]
+fn validate_local_test_install_paths(
+    executable_dir: &Path,
+    configured_install_dir: &Path,
+    temporary_dir: &Path,
+) -> io::Result<()> {
+    if !executable_dir.starts_with(temporary_dir) || executable_dir == temporary_dir {
+        return Err(io::Error::other(format!(
+            "The test executable must be inside the system temporary directory ({}).",
+            temporary_dir.display(),
+        )));
+    }
+
+    if !executable_dir
+        .to_string_lossy()
+        .eq_ignore_ascii_case(&configured_install_dir.to_string_lossy())
+    {
+        return Err(io::Error::other(format!(
+            "The test executable is not in the configured isolated install directory.\n\
+             Executable directory: {}\n\
+             Configured directory: {}",
+            executable_dir.display(),
+            configured_install_dir.display()
+        )));
+    }
+
+    Ok(())
 }
 
 #[cfg(feature = "local-updater-test")]
@@ -599,7 +672,7 @@ fn select_latest_desktop_release(
             .ok_or_else(|| io::Error::other("Invalid selected desktop version"))?;
         if let Some((_, asset_name)) = malformed_assets
             .iter()
-            .filter(|(version, _)| *version >= latest_version)
+            .filter(|(version, _)| *version > latest_version)
             .max_by_key(|(version, _)| *version)
         {
             return Err(io::Error::other(format!(
@@ -762,6 +835,8 @@ fn clear_stale_update_files(update_dir: &Path) {
     let _ = fs::remove_file(update_dir.join(PARTIAL_EXE_NAME));
     let _ = fs::remove_file(update_dir.join(EXTRACT_SCRIPT_NAME));
     let _ = fs::remove_file(update_dir.join(UPDATE_SCRIPT_NAME));
+    let _ = fs::remove_file(update_dir.join(UPDATE_RESULT_LOG_NAME));
+    let _ = fs::remove_file(update_dir.join(UPDATE_ERROR_LOG_NAME));
     let _ = fs::remove_dir_all(update_dir.join(EXTRACT_DIR_NAME));
 }
 
@@ -903,6 +978,14 @@ fn download_and_stage_asset(
             total = total
                 .checked_add(count as u64)
                 .ok_or_else(|| io::Error::other("Desktop update size overflow"))?;
+
+            if total > asset.size {
+                return Err(io::Error::other(format!(
+                    "Download exceeded the expected size of {} bytes",
+                    asset.size
+                ))
+                .into());
+            }
 
             output.write_all(&buffer[..count])?;
             hasher.update(&buffer[..count]);
@@ -1093,6 +1176,8 @@ try {
         -Destination $TargetExe `
         -Force
 
+    __LOCAL_TEST_REPLACEMENT_RESULT__
+
     # Start the updated Desktop.
     Start-Process `
         -FilePath $TargetExe `
@@ -1128,7 +1213,13 @@ catch {
 }
 "#;
 
-    fs::write(script_path, script)?;
+    fs::write(
+        script_path,
+        script.replace(
+            "__LOCAL_TEST_REPLACEMENT_RESULT__",
+            local_test_replacement_result(),
+        ),
+    )?;
 
     let update_dir = script_path
         .parent()
@@ -1154,6 +1245,28 @@ catch {
         .spawn()?;
 
     Ok(())
+}
+
+fn local_test_replacement_result() -> &'static str {
+    if cfg!(feature = "local-updater-test") {
+        r#"
+    if (-not (Test-Path -LiteralPath $TargetExe -PathType Leaf)) {
+        throw "Updated test executable not found: $TargetExe"
+    }
+
+    $updatedLength = (Get-Item -LiteralPath $TargetExe).Length
+    if ($updatedLength -le 0) {
+        throw "Updated test executable is empty: $TargetExe"
+    }
+
+    $resultPath = Join-Path $UpdateDir 'update-result.log'
+    "Local updater test replaced the executable ($updatedLength bytes): $TargetExe" |
+        Set-Content -LiteralPath $resultPath
+    exit 0
+"#
+    } else {
+        ""
+    }
 }
 
 // ------------------------------------------------------------
@@ -1268,6 +1381,60 @@ mod tests {
                 size: 2048,
             }],
         }
+    }
+
+    #[cfg(feature = "local-updater-test")]
+    #[test]
+    fn local_test_replacement_script_records_success_without_relaunching_release_exe() {
+        let result_action = local_test_replacement_result();
+
+        assert!(result_action.contains("update-result.log"));
+        assert!(result_action.contains("exit 0"));
+        assert!(!result_action.contains("Start-Process"));
+    }
+
+    #[cfg(feature = "local-updater-test")]
+    #[test]
+    fn local_test_executable_must_match_install_dir_inside_temp() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system clock should be after Unix epoch")
+            .as_nanos();
+        let temporary_dir = std::env::temp_dir().join(format!(
+            "cyphersr-local-updater-path-{}-{unique}",
+            std::process::id()
+        ));
+        let install_dir = temporary_dir.join("install");
+        let other_install_dir = temporary_dir.join("other-install");
+
+        fs::create_dir_all(&install_dir).expect("test install directory should be created");
+        fs::create_dir_all(&other_install_dir).expect("other install directory should be created");
+
+        let temporary_dir =
+            fs::canonicalize(&temporary_dir).expect("temporary root should canonicalize");
+        let install_dir =
+            fs::canonicalize(&install_dir).expect("install directory should canonicalize");
+        let other_install_dir =
+            fs::canonicalize(&other_install_dir).expect("other directory should canonicalize");
+
+        validate_local_test_install_paths(&install_dir, &install_dir, &temporary_dir)
+            .expect("matching test install inside temp should be allowed");
+        assert!(
+            validate_local_test_install_paths(&install_dir, &other_install_dir, &temporary_dir)
+                .is_err(),
+            "a different configured directory should be rejected"
+        );
+        assert!(
+            validate_local_test_install_paths(
+                &std::env::current_dir().expect("working directory should be readable"),
+                &install_dir,
+                &temporary_dir
+            )
+            .is_err(),
+            "an executable outside temp should be rejected"
+        );
+
+        fs::remove_dir_all(temporary_dir).expect("temporary test paths should be removed");
     }
 
     #[cfg(feature = "local-updater-test")]
@@ -1428,6 +1595,17 @@ mod tests {
     }
 
     #[test]
+    fn ignores_misnamed_asset_when_same_version_has_a_valid_asset() {
+        let valid = release("v1.2.1", "1.2.1", false);
+        let mut malformed = release("v1.2.1", "1.2.1", false);
+        malformed.assets[0].name = "CypherSR-Desktop-GUI-v1.2.1-win-x6.zip".to_string();
+
+        let update = select_latest_desktop_release(&[valid, malformed]).unwrap();
+
+        assert_eq!(update.version, "1.2.1");
+    }
+
+    #[test]
     fn valid_new_release_supersedes_older_misnamed_asset() {
         let mut malformed = release("v1.2.1", "1.2.1", false);
         malformed.assets[0].name = "CypherSR-Desktop-GUI-v1.2.1-win-x6.zip".to_string();
@@ -1500,6 +1678,61 @@ mod tests {
             exe_contents
         );
         assert!(!update_dir.join(EXTRACT_SCRIPT_NAME).exists());
+
+        fs::remove_dir_all(root).expect("remove test directory");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn stops_download_when_body_exceeds_declared_size_without_content_length() {
+        use std::net::TcpListener;
+        use std::thread;
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be after UNIX epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("CypherSR updater size limit test {unique}",));
+        let update_dir = root.join("update files");
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
+        let address = listener.local_addr().expect("get test server address");
+        let response_body = vec![b'x'; 1024];
+        let expected_hash = format!("{:x}", Sha256::digest(&response_body));
+
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept asset request");
+            let mut request = [0_u8; 2048];
+            stream.read(&mut request).expect("read asset request");
+            write!(stream, "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n")
+                .expect("write response headers");
+            stream
+                .write_all(&response_body)
+                .expect("write oversized response body");
+        });
+
+        let asset = DesktopUpdateAsset {
+            url: format!("http://{address}/desktop.exe"),
+            sha256: expected_hash,
+            size: 8,
+            is_zip: false,
+        };
+        let manifest = DesktopUpdateManifest {
+            version: "1.2.4".to_string(),
+            release_tag: "v1.2.4".to_string(),
+            primary: asset,
+            fallback_exe: None,
+        };
+        let client = Client::builder().build().expect("build HTTP client");
+
+        fs::create_dir_all(&update_dir).expect("create update directory");
+        let error = stage_update_assets(&client, &manifest, &update_dir)
+            .expect_err("oversized download should fail");
+        server.join().expect("finish test server");
+
+        assert!(error.to_string().contains("exceeded the expected size"));
+        assert!(!update_dir.join(PARTIAL_EXE_NAME).exists());
+        assert!(!update_dir.join(STAGED_EXE_NAME).exists());
 
         fs::remove_dir_all(root).expect("remove test directory");
     }

@@ -65,9 +65,15 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     println!("[Logging] Writing desktop logs to {}", log_path.display());
 
     let should_check_for_updates = !cfg!(debug_assertions) || cfg!(feature = "local-updater-test");
-    if should_check_for_updates && desktop_updater::check_and_apply_update() {
-        // PowerShell is waiting for this process to exit before replacing the EXE.
-        return Ok(());
+    if should_check_for_updates {
+        let update_handed_off = desktop_updater::check_and_apply_update();
+        let updater_test_only = cfg!(feature = "local-updater-test")
+            && std::env::var_os("CYPHERSR_LOCAL_UPDATE_TEST_ONLY").is_some();
+
+        if update_handed_off || updater_test_only {
+            // PowerShell is waiting for this process to exit before replacing the EXE.
+            return Ok(());
+        }
     }
 
     if let Err(error) = launcher::register_bundled_mpv_if_needed() {
