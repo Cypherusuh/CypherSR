@@ -3,6 +3,9 @@ name = "CypherSR-Desktop"
 version = "1.2.4"
 edition = "2024"
 
+[features]
+local-updater-test = []
+
 [dependencies]
 arboard = "3.7.0"
 open = "5.4.4"
