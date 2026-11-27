@@ -64,7 +64,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     };
     println!("[Logging] Writing desktop logs to {}", log_path.display());
 
-    if !cfg!(debug_assertions) && desktop_updater::check_and_apply_update() {
+    let should_check_for_updates = !cfg!(debug_assertions) || cfg!(feature = "local-updater-test");
+    if should_check_for_updates && desktop_updater::check_and_apply_update() {
         // PowerShell is waiting for this process to exit before replacing the EXE.
         return Ok(());
     }

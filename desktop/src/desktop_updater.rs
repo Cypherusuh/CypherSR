@@ -1,12 +1,17 @@
-
 use std::fs;
-use std::io::{self, Read, Write};
-use std::path::Path;
+#[cfg(any(not(feature = "local-updater-test"), test))]
+use std::io::Read;
+use std::io::{self, Write};
+use std::path::{Path, PathBuf};
 use std::process::Command;
+#[cfg(not(feature = "local-updater-test"))]
 use std::time::Duration;
 
+#[cfg(any(not(feature = "local-updater-test"), test))]
 use reqwest::blocking::Client;
+#[cfg(any(not(feature = "local-updater-test"), test))]
 use serde::Deserialize;
+#[cfg(any(not(feature = "local-updater-test"), test))]
 use sha2::{Digest, Sha256};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     MB_ICONERROR, MB_ICONINFORMATION, MB_OK, MB_YESNO, MessageBoxW,
@@ -14,17 +19,24 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 
 // The newest desktop release may not be the repository's latest release,
 // because backend releases use the same repository but independent versions.
-const RELEASE_API_URL: &str =
-    "https://api.github.com/repos/Cypherusuh/CypherSR/releases";
+#[cfg(not(feature = "local-updater-test"))]
+const RELEASE_API_URL: &str = "https://api.github.com/repos/Cypherusuh/CypherSR/releases";
+#[cfg(any(not(feature = "local-updater-test"), test))]
 const REPOSITORY: &str = "Cypherusuh/CypherSR";
 
 // Release asset naming convention.
 const DESKTOP_ASSET_PREFIX: &str = "CypherSR-Desktop-GUI-v";
 const DESKTOP_ASSET_SUFFIX_ZIP: &str = "-win-x64.zip";
+#[cfg(any(not(feature = "local-updater-test"), test))]
 const DESKTOP_ASSET_SUFFIX_EXE: &str = "-win-x64.exe";
 
 // Installed executable name.
 const DESKTOP_EXE_NAME: &str = "CypherSR-Desktop.exe";
+
+#[cfg(feature = "local-updater-test")]
+const LOCAL_PUBLISHING_ZIP_DIR: &str = "Publishing zip";
+#[cfg(feature = "local-updater-test")]
+const LOCAL_TEST_VERSION_ENV: &str = "CYPHERSR_LOCAL_UPDATE_TEST_CURRENT_VERSION";
 
 const DESKTOP_UPDATE_DIR: &str = ".tmp\\desktop-update";
 const STAGED_EXE_NAME: &str = "CypherSR-Desktop.exe";
@@ -35,11 +47,13 @@ const EXTRACT_DIR_NAME: &str = "extracted";
 const EXTRACT_SCRIPT_NAME: &str = "extract-desktop-update.ps1";
 const UPDATE_SCRIPT_NAME: &str = "replace-desktop.ps1";
 
+#[cfg(not(feature = "local-updater-test"))]
 const HTTP_TIMEOUT_SECS: u64 = 600;
 
 // Metadata requests (GitHub release listing) must fail fast so a stalled
 // connection cannot freeze startup. The long timeout above is only for the
 // asset download.
+#[cfg(not(feature = "local-updater-test"))]
 const API_TIMEOUT_SECS: u64 = 20;
 
 const EXTRACT_SCRIPT: &str = r#"
@@ -61,6 +75,7 @@ Expand-Archive `
 // GitHub API structures
 // ------------------------------------------------------------
 
+#[cfg(any(not(feature = "local-updater-test"), test))]
 #[derive(Debug, Deserialize)]
 struct GitHubRelease {
     tag_name: String,
@@ -68,6 +83,7 @@ struct GitHubRelease {
     prerelease: bool,
 }
 
+#[cfg(any(not(feature = "local-updater-test"), test))]
 #[derive(Debug, Deserialize)]
 struct GitHubReleaseAsset {
     name: String,
@@ -83,6 +99,7 @@ struct GitHubReleaseAsset {
     size: u64,
 }
 
+#[cfg(any(not(feature = "local-updater-test"), test))]
 #[derive(Debug)]
 struct DesktopUpdateManifest {
     version: String,
@@ -91,12 +108,27 @@ struct DesktopUpdateManifest {
     fallback_exe: Option<DesktopUpdateAsset>,
 }
 
+#[cfg(any(not(feature = "local-updater-test"), test))]
 #[derive(Debug)]
 struct DesktopUpdateAsset {
     url: String,
     sha256: String,
     size: u64,
     is_zip: bool,
+}
+
+#[cfg(feature = "local-updater-test")]
+#[derive(Debug)]
+struct LocalDesktopUpdate {
+    version: String,
+    archive: PathBuf,
+}
+
+struct UpdateStagingPaths {
+    executable: PathBuf,
+    update_dir: PathBuf,
+    staged_executable: PathBuf,
+    script_path: PathBuf,
 }
 
 // ------------------------------------------------------------
@@ -106,6 +138,7 @@ struct DesktopUpdateAsset {
 /// Returns true when an update has been staged and the app
 /// should exit so the external updater can replace the
 /// running executable.
+#[cfg(not(feature = "local-updater-test"))]
 pub fn check_and_apply_update() -> bool {
     let current_version = env!("CYPHERSR_APP_VERSION");
 
@@ -146,8 +179,7 @@ pub fn check_and_apply_update() -> bool {
         println!(
             "[DesktopUpdate] Current version {current_version}; \
              latest desktop version {} (release {}).",
-            manifest.version,
-            manifest.release_tag
+            manifest.version, manifest.release_tag
         );
 
         return false;
@@ -155,8 +187,7 @@ pub fn check_and_apply_update() -> bool {
 
     println!(
         "[DesktopUpdate] Update available: {} -> {}",
-        current_version,
-        manifest.version
+        current_version, manifest.version
     );
 
     let prompt = format!(
@@ -165,8 +196,7 @@ pub fn check_and_apply_update() -> bool {
          Available version: {}\n\
          GitHub release: {}\n\n\
          Download and install it now?",
-        manifest.version,
-        manifest.release_tag
+        manifest.version, manifest.release_tag
     );
 
     if !ask_yes_no(&prompt) {
@@ -188,10 +218,205 @@ pub fn check_and_apply_update() -> bool {
     }
 }
 
+#[cfg(feature = "local-updater-test")]
+pub fn check_and_apply_update() -> bool {
+    let current_version = match std::env::var(LOCAL_TEST_VERSION_ENV) {
+        Ok(version) => version,
+        Err(std::env::VarError::NotPresent) => env!("CYPHERSR_APP_VERSION").to_string(),
+        Err(error) => {
+            show_error(&format!(
+                "Could not read the local updater test version from {LOCAL_TEST_VERSION_ENV}.\n\n{error}"
+            ));
+            return false;
+        }
+    };
+
+    match find_newer_local_desktop_update(&current_version) {
+        Ok(Some(update)) => {
+            println!(
+                "[DesktopUpdate] Found local update {} at {}",
+                update.version,
+                update.archive.display()
+            );
+
+            let prompt = format!(
+                "A local Desktop update is available.\n\n\
+                 Test current version: {current_version}\n\
+                 Available version: {}\n\
+                 Publishing ZIP: {}\n\n\
+                 Install it in this test copy?",
+                update.version,
+                update.archive.display()
+            );
+
+            if !ask_yes_no(&prompt) {
+                return false;
+            }
+
+            match stage_local_update(&update) {
+                Ok(()) => true,
+                Err(error) => {
+                    show_error(&format!(
+                        "Could not install the local test update.\n\n\
+                         {error}\n\n\
+                         The current version will continue running."
+                    ));
+                    false
+                }
+            }
+        }
+        Ok(None) => {
+            println!(
+                "[DesktopUpdate] No newer local Publishing zip found; GitHub checks are disabled in local updater test mode."
+            );
+            false
+        }
+        Err(error) => {
+            show_error(&format!(
+                "Could not inspect local Desktop Publishing zips.\n\n{error}"
+            ));
+            false
+        }
+    }
+}
+
+// ------------------------------------------------------------
+// Local release discovery
+// ------------------------------------------------------------
+
+#[cfg(feature = "local-updater-test")]
+fn find_newer_local_desktop_update(
+    current_version: &str,
+) -> Result<Option<LocalDesktopUpdate>, Box<dyn std::error::Error>> {
+    find_newer_local_update_in_roots(&discover_local_release_roots(), current_version)
+}
+
+#[cfg(feature = "local-updater-test")]
+fn find_newer_local_update_in_roots(
+    release_roots: &[PathBuf],
+    current_version: &str,
+) -> Result<Option<LocalDesktopUpdate>, Box<dyn std::error::Error>> {
+    let current_version = parse_version(current_version)
+        .ok_or_else(|| io::Error::other("Invalid installed Desktop version"))?;
+    let mut latest: Option<((u64, u64, u64), LocalDesktopUpdate)> = None;
+
+    for release_root in release_roots {
+        let entries = match fs::read_dir(release_root) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error.into()),
+        };
+
+        for entry in entries {
+            let entry = entry?;
+            if !entry.file_type()?.is_dir() {
+                continue;
+            }
+
+            let version_name = entry.file_name().to_string_lossy().into_owned();
+            let Some(parsed_version) = parse_version(&version_name) else {
+                continue;
+            };
+            if parsed_version <= current_version {
+                continue;
+            }
+
+            let version = version_name
+                .strip_prefix('v')
+                .unwrap_or(&version_name)
+                .to_string();
+            let Some(archive) = find_local_desktop_archive(&entry.path(), &version)? else {
+                eprintln!(
+                    "[DesktopUpdate] Skipping local release {version_name}: \
+                     its Publishing zip was not found or was empty."
+                );
+                continue;
+            };
+
+            let candidate = LocalDesktopUpdate { version, archive };
+
+            if latest
+                .as_ref()
+                .is_none_or(|(latest_version, _)| parsed_version > *latest_version)
+            {
+                latest = Some((parsed_version, candidate));
+            }
+        }
+    }
+
+    Ok(latest.map(|(_, update)| update))
+}
+
+#[cfg(feature = "local-updater-test")]
+fn discover_local_release_roots() -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+
+    match std::env::current_dir() {
+        Ok(current_dir) => {
+            push_unique_path(&mut roots, current_dir.join("release"));
+            if current_dir
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.eq_ignore_ascii_case("release"))
+            {
+                push_unique_path(&mut roots, current_dir);
+            }
+        }
+        Err(error) => {
+            eprintln!("[DesktopUpdate] Could not inspect the current directory: {error}");
+        }
+    }
+
+    match std::env::current_exe() {
+        Ok(executable) => {
+            for ancestor in executable.ancestors() {
+                if ancestor
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.eq_ignore_ascii_case("release"))
+                {
+                    push_unique_path(&mut roots, ancestor.to_path_buf());
+                }
+            }
+        }
+        Err(error) => {
+            eprintln!("[DesktopUpdate] Could not locate the running executable: {error}");
+        }
+    }
+
+    roots
+}
+
+#[cfg(feature = "local-updater-test")]
+fn push_unique_path(paths: &mut Vec<PathBuf>, path: PathBuf) {
+    if !paths.contains(&path) {
+        paths.push(path);
+    }
+}
+
+#[cfg(feature = "local-updater-test")]
+fn find_local_desktop_archive(
+    release_directory: &Path,
+    version: &str,
+) -> io::Result<Option<PathBuf>> {
+    let archive_name = format!("{DESKTOP_ASSET_PREFIX}{version}{DESKTOP_ASSET_SUFFIX_ZIP}");
+    let archive = release_directory
+        .join(LOCAL_PUBLISHING_ZIP_DIR)
+        .join(archive_name);
+
+    match fs::metadata(&archive) {
+        Ok(metadata) if metadata.is_file() && metadata.len() > 0 => Ok(Some(archive)),
+        Ok(_) => Ok(None),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
 // ------------------------------------------------------------
 // GitHub release discovery
 // ------------------------------------------------------------
 
+#[cfg(not(feature = "local-updater-test"))]
 fn fetch_latest_desktop_release(
     client: &Client,
 ) -> Result<DesktopUpdateManifest, Box<dyn std::error::Error>> {
@@ -226,6 +451,7 @@ fn fetch_latest_desktop_release(
     select_latest_desktop_release(&all_releases)
 }
 
+#[cfg(any(not(feature = "local-updater-test"), test))]
 fn select_latest_desktop_release(
     releases: &[GitHubRelease],
 ) -> Result<DesktopUpdateManifest, Box<dyn std::error::Error>> {
@@ -402,6 +628,7 @@ fn select_latest_desktop_release(
     })
 }
 
+#[cfg(any(not(feature = "local-updater-test"), test))]
 fn create_desktop_update_asset(
     release_tag: &str,
     asset: &GitHubReleaseAsset,
@@ -460,23 +687,54 @@ fn create_desktop_update_asset(
 // Download and stage update
 // ------------------------------------------------------------
 
+#[cfg(not(feature = "local-updater-test"))]
 fn download_and_stage_update(
     client: &Client,
     manifest: &DesktopUpdateManifest,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let executable = std::env::current_exe()?;
+    let paths = prepare_update_paths()?;
+    stage_update_assets(client, manifest, &paths.update_dir)?;
+    hand_off_staged_update(&paths)
+}
 
+#[cfg(feature = "local-updater-test")]
+fn stage_local_update(update: &LocalDesktopUpdate) -> Result<(), Box<dyn std::error::Error>> {
+    let paths = prepare_update_paths()?;
+    let local_archive = paths.update_dir.join(DOWNLOADED_ZIP_NAME);
+    let extract_dir = paths.update_dir.join(EXTRACT_DIR_NAME);
+    let extract_script = paths.update_dir.join(EXTRACT_SCRIPT_NAME);
+    let stage_result: Result<(), Box<dyn std::error::Error>> = (|| {
+        copy_local_archive(&update.archive, &local_archive)?;
+        extract_update_executable(
+            &local_archive,
+            &extract_dir,
+            &paths.staged_executable,
+            &extract_script,
+        )?;
+        Ok(())
+    })();
+
+    if let Err(error) = stage_result {
+        let _ = fs::remove_file(&local_archive);
+        let _ = fs::remove_file(&paths.staged_executable);
+        let _ = fs::remove_file(&extract_script);
+        let _ = fs::remove_dir_all(&extract_dir);
+        let _ = fs::remove_dir_all(&paths.update_dir);
+        return Err(error);
+    }
+
+    let _ = fs::remove_file(local_archive);
+    let _ = fs::remove_dir_all(extract_dir);
+    hand_off_staged_update(&paths)
+}
+
+fn prepare_update_paths() -> Result<UpdateStagingPaths, Box<dyn std::error::Error>> {
+    let executable = std::env::current_exe()?;
     let install_dir = executable.parent().ok_or_else(|| {
-        io::Error::other(
-            "Could not determine the desktop installation directory",
-        )
+        io::Error::other("Could not determine the desktop installation directory")
     })?;
 
-    if executable
-        .file_name()
-        .and_then(|name| name.to_str())
-        != Some(DESKTOP_EXE_NAME)
-    {
+    if executable.file_name().and_then(|name| name.to_str()) != Some(DESKTOP_EXE_NAME) {
         return Err(io::Error::other(format!(
             "The running executable is not named {DESKTOP_EXE_NAME}.\n\
              Current path: {}",
@@ -486,44 +744,68 @@ fn download_and_stage_update(
     }
 
     let update_dir = install_dir.join(DESKTOP_UPDATE_DIR);
-
     fs::create_dir_all(&update_dir)?;
+    clear_stale_update_files(&update_dir);
 
-    let staged_executable = update_dir.join(STAGED_EXE_NAME);
-    let script_path = update_dir.join(UPDATE_SCRIPT_NAME);
+    Ok(UpdateStagingPaths {
+        executable,
+        staged_executable: update_dir.join(STAGED_EXE_NAME),
+        script_path: update_dir.join(UPDATE_SCRIPT_NAME),
+        update_dir,
+    })
+}
 
-    // Remove stale files from previous update attempts.
-    let _ = fs::remove_file(&staged_executable);
+fn clear_stale_update_files(update_dir: &Path) {
+    let _ = fs::remove_file(update_dir.join(STAGED_EXE_NAME));
     let _ = fs::remove_file(update_dir.join(DOWNLOADED_ZIP_NAME));
     let _ = fs::remove_file(update_dir.join(PARTIAL_ZIP_NAME));
     let _ = fs::remove_file(update_dir.join(PARTIAL_EXE_NAME));
     let _ = fs::remove_file(update_dir.join(EXTRACT_SCRIPT_NAME));
-    let _ = fs::remove_file(&script_path);
-
+    let _ = fs::remove_file(update_dir.join(UPDATE_SCRIPT_NAME));
     let _ = fs::remove_dir_all(update_dir.join(EXTRACT_DIR_NAME));
+}
 
-    stage_update_assets(client, manifest, &update_dir)?;
-
-    if let Err(error) = start_replacement_script(
-        &executable,
-        &staged_executable,
-        std::process::id(),
-        &script_path,
-    ) {
-        let _ = fs::remove_file(&staged_executable);
-        let _ = fs::remove_file(&script_path);
-        let _ = fs::remove_dir_all(&update_dir);
-
-        return Err(error.into());
+#[cfg(feature = "local-updater-test")]
+fn copy_local_archive(source: &Path, destination: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    let mut source = fs::File::open(source)?;
+    let expected_size = source.metadata()?.len();
+    if expected_size == 0 {
+        return Err(io::Error::other("The local Desktop ZIP is empty").into());
     }
 
-    println!(
-        "[DesktopUpdate] Handing off replacement to PowerShell."
-    );
+    let mut destination_file = fs::File::create(destination)?;
+    let copied_size = io::copy(&mut source, &mut destination_file)?;
+    destination_file.flush()?;
+    destination_file.sync_all()?;
+
+    if copied_size != expected_size {
+        return Err(io::Error::other(format!(
+            "Local ZIP copy size mismatch. Expected {expected_size} bytes, copied {copied_size} bytes."
+        ))
+        .into());
+    }
 
     Ok(())
 }
 
+fn hand_off_staged_update(paths: &UpdateStagingPaths) -> Result<(), Box<dyn std::error::Error>> {
+    if let Err(error) = start_replacement_script(
+        &paths.executable,
+        &paths.staged_executable,
+        std::process::id(),
+        &paths.script_path,
+    ) {
+        let _ = fs::remove_file(&paths.staged_executable);
+        let _ = fs::remove_file(&paths.script_path);
+        let _ = fs::remove_dir_all(&paths.update_dir);
+        return Err(error.into());
+    }
+
+    println!("[DesktopUpdate] Handing off replacement to PowerShell.");
+    Ok(())
+}
+
+#[cfg(any(not(feature = "local-updater-test"), test))]
 fn stage_update_assets(
     client: &Client,
     manifest: &DesktopUpdateManifest,
@@ -568,6 +850,7 @@ fn stage_update_assets(
     Ok(())
 }
 
+#[cfg(any(not(feature = "local-updater-test"), test))]
 fn download_and_stage_asset(
     client: &Client,
     version: &str,
@@ -599,8 +882,7 @@ fn download_and_stage_asset(
                     "Download size mismatch.\n\
                      Expected: {} bytes\n\
                      Received: {} bytes",
-                    asset.size,
-                    content_length
+                    asset.size, content_length
                 ))
                 .into());
             }
@@ -639,8 +921,7 @@ fn download_and_stage_asset(
                 "Download size verification failed.\n\
                  Expected: {} bytes\n\
                  Received: {} bytes",
-                asset.size,
-                total
+                asset.size, total
             ))
             .into());
         }
@@ -652,8 +933,7 @@ fn download_and_stage_asset(
                 "SHA-256 verification failed.\n\
                  Expected: {}\n\
                  Received: {}",
-                asset.sha256,
-                actual_sha256
+                asset.sha256, actual_sha256
             ))
             .into());
         }
@@ -850,11 +1130,9 @@ catch {
 
     fs::write(script_path, script)?;
 
-    let update_dir = script_path.parent().ok_or_else(|| {
-        io::Error::other(
-            "Could not determine Desktop update directory"
-        )
-    })?;
+    let update_dir = script_path
+        .parent()
+        .ok_or_else(|| io::Error::other("Could not determine Desktop update directory"))?;
 
     Command::new("powershell.exe")
         .args([
@@ -898,6 +1176,7 @@ fn parse_version(version: &str) -> Option<(u64, u64, u64)> {
     Some((major, minor, patch))
 }
 
+#[cfg(not(feature = "local-updater-test"))]
 fn is_newer_version(candidate: &str, current: &str) -> bool {
     match (parse_version(candidate), parse_version(current)) {
         (Some(candidate), Some(current)) => candidate > current,
@@ -991,6 +1270,57 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "local-updater-test")]
+    #[test]
+    fn finds_newest_local_publishing_zip_newer_than_installed() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system clock should be after Unix epoch")
+            .as_nanos();
+        let temporary_root = std::env::temp_dir().join(format!(
+            "cyphersr-local-updater-{}-{unique}",
+            std::process::id()
+        ));
+        let release_root = temporary_root.join("release");
+        let current_archive = release_root
+            .join("v1.2.3")
+            .join(LOCAL_PUBLISHING_ZIP_DIR)
+            .join(format!(
+                "{DESKTOP_ASSET_PREFIX}1.2.3{DESKTOP_ASSET_SUFFIX_ZIP}"
+            ));
+        let newer_archive = release_root
+            .join("v1.2.4")
+            .join(LOCAL_PUBLISHING_ZIP_DIR)
+            .join(format!(
+                "{DESKTOP_ASSET_PREFIX}1.2.4{DESKTOP_ASSET_SUFFIX_ZIP}"
+            ));
+
+        fs::create_dir_all(current_archive.parent().unwrap())
+            .expect("current local release directory should be created");
+        fs::write(&current_archive, b"current archive")
+            .expect("current local archive should be created");
+        fs::create_dir_all(newer_archive.parent().unwrap())
+            .expect("newer local release directory should be created");
+        fs::write(&newer_archive, b"newer archive").expect("newer local archive should be created");
+        fs::create_dir_all(release_root.join("v1.2.5").join(LOCAL_PUBLISHING_ZIP_DIR))
+            .expect("incomplete release directory should be created");
+
+        let update = find_newer_local_update_in_roots(std::slice::from_ref(&release_root), "1.2.3")
+            .expect("local releases should be scanned")
+            .expect("newer complete release should be selected");
+
+        assert_eq!(update.version, "1.2.4");
+        assert_eq!(update.archive, newer_archive);
+        assert!(
+            find_newer_local_update_in_roots(std::slice::from_ref(&release_root), "1.2.4")
+                .expect("local releases should be scanned")
+                .is_none(),
+            "an incomplete release newer than the installed version should be skipped"
+        );
+
+        fs::remove_dir_all(temporary_root).expect("temporary releases should be removed");
+    }
+
     #[test]
     fn selects_highest_desktop_version_independent_of_release_order() {
         let releases = [
@@ -1020,7 +1350,9 @@ mod tests {
     #[test]
     fn prefers_zip_when_both_assets_are_present() {
         let mut release = release_zip("v1.2.1", "1.2.1", false);
-        release.assets.push(release_exe("v1.2.1", "1.2.1", false).assets.remove(0));
+        release
+            .assets
+            .push(release_exe("v1.2.1", "1.2.1", false).assets.remove(0));
 
         let update = select_latest_desktop_release(&[release]).unwrap();
 
@@ -1037,9 +1369,7 @@ mod tests {
     #[test]
     fn ignores_exe_fallback_without_a_verified_digest() {
         let mut release = release_zip("v1.2.1", "1.2.1", false);
-        let mut exe_asset = release_exe("v1.2.1", "1.2.1", false)
-            .assets
-            .remove(0);
+        let mut exe_asset = release_exe("v1.2.1", "1.2.1", false).assets.remove(0);
         exe_asset.digest = None;
         release.assets.push(exe_asset);
 
@@ -1157,17 +1487,12 @@ mod tests {
             version: "1.2.4".to_string(),
             release_tag: "v1.2.4".to_string(),
             primary: asset("/desktop.zip", b"not a zip archive", true),
-            fallback_exe: Some(asset(
-                "/desktop.exe",
-                &exe_contents,
-                false,
-            )),
+            fallback_exe: Some(asset("/desktop.exe", &exe_contents, false)),
         };
         let client = Client::builder().build().expect("build HTTP client");
 
         fs::create_dir_all(&update_dir).expect("create update directory");
-        stage_update_assets(&client, &manifest, &update_dir)
-            .expect("stage executable fallback");
+        stage_update_assets(&client, &manifest, &update_dir).expect("stage executable fallback");
         server.join().expect("finish test server");
 
         assert_eq!(
